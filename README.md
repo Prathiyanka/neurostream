@@ -64,7 +64,10 @@ INFO download_data: report written to data\subject_report.json
   (sampling rate, channel count, duration, annotation labels, trial count) and writes
   `data/subject_report.json`. Training and replay read that report instead of a
   hard-coded exclusion list, and the report shows where it agrees or disagrees with the
-  commonly cited exclusions (88, 92, 100, 104).
+  commonly cited exclusions (88, 92, 100, 104). **Result on runs 4/8/12:** 106 of 109
+  subjects pass. Subjects 88, 92 and 100 are excluded: they were recorded at 128 Hz, not 160 Hz.
+  Subject 104 passes every check. Its run 8 is shorter (106 s, 13 trials, vs. 125 s and 15
+  trials for most subjects), but the data is valid, so it is kept.
 - **Python helper scripts instead of a Makefile** so everything runs on Windows.
 - **Integration tests are marked** (`-m integration`) so unit tests run without Docker;
   CI runs both, with Redis and Postgres as service containers.
