@@ -1,4 +1,5 @@
 import pytest
+
 from download_data import (
     RecordingInfo,
     SubjectReport,

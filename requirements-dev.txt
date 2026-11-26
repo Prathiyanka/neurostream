@@ -1,10 +1,10 @@
-# Tooling + libraries needed by scripts and tests at the repo root.
-# Each service will get its own requirements.txt for its Docker image.
-mne==1.13.2
-scipy==1.17.1
-numpy>=1.26,<3
-redis==5.2.1
+# Everything needed to run scripts, tests and linters at the repo root.
+# Each service also has its own requirements.txt, used by its Docker image.
+-r services/ingest/requirements.txt
+-r services/replayer/requirements.txt
+-e ./services/common
 psycopg[binary]==3.2.3
-pytest==8.3.4
+pytest==9.2.0
+pytest-asyncio==1.5.0
 ruff==0.8.4
 mypy==1.14.1
