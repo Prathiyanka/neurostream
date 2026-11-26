@@ -1,4 +1,4 @@
-# Phase 1: infrastructure only. Application services are added in later phases.
+# Infrastructure + the services built so far. More services are added phase by phase.
 name: neurostream
 
 services:
@@ -31,6 +31,35 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  ingest:
+    build:
+      context: .
+      dockerfile: services/ingest/Dockerfile
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "${INGEST_PORT:-8001}:8001"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # On-demand device simulator (not started by `up`; the API will drive it in Phase 5):
+  #   docker compose run --rm replayer --subjects 1 2 --speed 1
+  replayer:
+    profiles: ["replay"]
+    build:
+      context: .
+      dockerfile: services/replayer/Dockerfile
+    command: ["--url", "ws://ingest:8001/ws/device", "--data-dir", "/data", "--subjects", "1"]
+    volumes:
+      - ./data:/data:ro
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      ingest:
+        condition: service_healthy
 
 volumes:
   pgdata:
