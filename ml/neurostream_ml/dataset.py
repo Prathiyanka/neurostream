@@ -145,22 +145,42 @@ def build_cache(
     return cache_dir
 
 
+def _normalized_path(cache_dir: Path, ch_names: Sequence[str]) -> Path:
+    key = hashlib.sha1(json.dumps(list(ch_names)).encode()).hexdigest()[:10]
+    return cache_dir / f"X_norm_{len(ch_names)}ch_{key}.npy"
+
+
 def load_window_set(
     cache_dir: Path, channels: Sequence[str] | None, chunk: int = 4096
 ) -> WindowSet:
-    """Load the cache for one channel set, normalizing each window (shared function)."""
+    """Load one channel set, normalizing each window with the shared serving function.
+
+    The normalized windows are written to disk once per channel set and returned as a
+    read-only memory map, not as an in-process array. The OS keeps the pages it can in
+    its file cache and can evict them under memory pressure, instead of the training
+    process holding ~1.7 GB (64 channels) of committed memory and being killed.
+    """
     meta = json.loads((cache_dir / "done.json").read_text())
     ch_all: list[str] = meta["ch_names"]
     idx = channel_indices(ch_all, channels)
-    X_src = np.load(cache_dir / "X.npy", mmap_mode="r")
-    X = np.empty((X_src.shape[0], len(idx), X_src.shape[2]), dtype=np.float16)
-    for start in range(0, X_src.shape[0], chunk):
-        block = np.asarray(X_src[start : start + chunk][:, idx], dtype=np.float32)
-        X[start : start + chunk] = np.stack([normalize_window(w) for w in block])
+    ch_names = [ch_all[i] for i in idx]
+    out = _normalized_path(cache_dir, ch_names)
+    if not out.exists():
+        X_src = np.load(cache_dir / "X.npy", mmap_mode="r")
+        tmp = out.with_suffix(".tmp.npy")
+        X = np.lib.format.open_memmap(
+            tmp, mode="w+", dtype=np.float16, shape=(X_src.shape[0], len(idx), X_src.shape[2])
+        )
+        for start in range(0, X_src.shape[0], chunk):
+            block = np.asarray(X_src[start : start + chunk][:, idx], dtype=np.float32)
+            X[start : start + chunk] = np.stack([normalize_window(w) for w in block])
+        X.flush()
+        del X, X_src  # close the maps before renaming (required on Windows)
+        tmp.replace(out)  # atomic: a half-written file is never mistaken for a done one
     return WindowSet(
-        X=X,
+        X=np.load(out, mmap_mode="r"),
         y=np.load(cache_dir / "y.npy"),
         subject=np.load(cache_dir / "subject.npy"),
         run=np.load(cache_dir / "run.npy"),
-        ch_names=[ch_all[i] for i in idx],
+        ch_names=ch_names,
     )

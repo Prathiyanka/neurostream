@@ -133,3 +133,31 @@ def test_parse_history_log_keeps_only_finished_folds(tmp_path: Path) -> None:
     assert sorted(hist) == [0, 1]
     assert [h["val_bal_acc"] for h in hist[0]] == [0.3682, 0.4]
     assert hist[0][-1]["elapsed_s"] == 75.0 and len(hist[1]) == 1
+
+
+def test_load_window_set_is_disk_backed_and_matches_serving_normalization(
+    tmp_path: Path,
+) -> None:
+    import json
+
+    from neurostream_common.preprocessing import normalize_window
+    from neurostream_ml.dataset import load_window_set
+
+    rng = np.random.default_rng(0)
+    raw = (rng.normal(size=(10, 4, 320)) * 50).astype(np.float16)
+    np.save(tmp_path / "X.npy", raw)
+    np.save(tmp_path / "y.npy", np.zeros(10, np.int8))
+    np.save(tmp_path / "subject.npy", np.ones(10, np.int16))
+    np.save(tmp_path / "run.npy", np.full(10, 4, np.int8))
+    (tmp_path / "done.json").write_text(json.dumps({"ch_names": ["A", "B", "C", "D"]}))
+
+    ws = load_window_set(tmp_path, ["D", "B"], chunk=3)  # chunk not dividing N
+    assert isinstance(ws.X, np.memmap) and ws.ch_names == ["D", "B"]
+    expected = np.stack([normalize_window(w[[3, 1]].astype(np.float32)) for w in raw])
+    np.testing.assert_array_equal(ws.X, expected.astype(np.float16))
+    files = sorted(f.name for f in tmp_path.glob("X_norm_*"))
+    assert len(files) == 1 and ".tmp" not in files[0]
+    again = load_window_set(tmp_path, ["D", "B"])  # reuses the file
+    np.testing.assert_array_equal(again.X, ws.X)
+    assert sorted(f.name for f in tmp_path.glob("X_norm_*")) == files
+    del ws, again  # release the maps so Windows can delete tmp_path
