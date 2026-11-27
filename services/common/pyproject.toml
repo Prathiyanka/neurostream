@@ -7,7 +7,7 @@ name = "neurostream-common"
 version = "0.1.0"
 description = "Code shared by NeuroStream services and the ML pipeline (schemas, windowing, codecs)"
 requires-python = ">=3.11"
-dependencies = ["numpy>=1.26", "pydantic>=2.7"]
+dependencies = ["numpy>=1.26", "pydantic>=2.7", "scipy>=1.11"]
 
 [tool.setuptools]
 packages = ["neurostream_common"]
