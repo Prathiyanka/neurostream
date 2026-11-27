@@ -71,10 +71,32 @@ def test_eegnet_shapes_and_max_norm(n_channels: int) -> None:
 
 def test_training_loop_runs_and_restores_best_model() -> None:
     X, y = synthetic_mi(n=192)
-    res = train_eegnet(X, y, X[:64], y[:64], TrainConfig(epochs=3, patience=2, threads=1))
+    train, val = np.arange(64, 192), np.arange(64)
+    res = train_eegnet(X, y, train, val, TrainConfig(epochs=3, patience=2, threads=1))
     assert 0 <= res.best_epoch < 3 and len(res.history) >= 1
-    proba = predict_proba(res.model, X[:10])
+    proba = predict_proba(res.model, X, np.arange(10))
     np.testing.assert_allclose(proba.sum(axis=1), 1.0, atol=1e-5)
+    # A boolean mask selects the same windows as the equivalent index array.
+    mask = np.zeros(len(X), dtype=bool)
+    mask[:10] = True
+    np.testing.assert_array_equal(predict_proba(res.model, X, mask), proba)
+    # Selecting by index must not depend on the windows outside the selection.
+    X2 = X.copy()
+    X2[10:] = 0
+    np.testing.assert_allclose(predict_proba(res.model, X2, np.arange(10)), proba, atol=1e-6)
+
+
+def test_training_with_index_arrays_matches_training_on_copies() -> None:
+    """Index-based training (no copies) is the same computation as training on a slice."""
+    X, y = synthetic_mi(n=192)
+    cfg = TrainConfig(epochs=2, patience=2, threads=1)
+    a = train_eegnet(X, y, np.arange(64, 192), np.arange(64), cfg)
+    Xc, yc = X[np.r_[64:192, 0:64]], y[np.r_[64:192, 0:64]]
+    b = train_eegnet(Xc, yc, np.arange(128), np.arange(128, 192), cfg)
+    assert [h["val_bal_acc"] for h in a.history] == [h["val_bal_acc"] for h in b.history]
+    np.testing.assert_allclose(
+        [h["train_loss"] for h in a.history], [h["train_loss"] for h in b.history], rtol=1e-5
+    )
 
 
 def test_onnx_export_matches_pytorch(tmp_path: Path) -> None:
@@ -93,3 +115,21 @@ def test_metrics() -> None:
     assert set(ps) == {1, 2}
     lo, hi = bootstrap_ci([0.4, 0.5, 0.6])
     assert lo <= 0.5 <= hi
+
+
+def test_parse_history_log_keeps_only_finished_folds(tmp_path: Path) -> None:
+    from neurostream_ml.experiments import parse_history_log
+
+    log = tmp_path / "train.log"
+    log.write_text(
+        "x INFO ml.train: epoch 0 loss 1.0769 val_bal_acc 0.3682 (38s)\n"
+        "x INFO ml.train: epoch 1 loss 1.0500 val_bal_acc 0.4000 (75s)\n"
+        "x INFO ml.experiments: fold 0 test {'accuracy': 0.4}\n"
+        "x INFO ml.train: epoch 0 loss 1.0826 val_bal_acc 0.3915 (37s)\n"
+        "x INFO ml.experiments: fold 1 test {'accuracy': 0.5}\n"
+        "x INFO ml.train: epoch 0 loss 1.0809 val_bal_acc 0.3902 (43s)\n"  # killed here
+    )
+    hist = parse_history_log(log)
+    assert sorted(hist) == [0, 1]
+    assert [h["val_bal_acc"] for h in hist[0]] == [0.3682, 0.4]
+    assert hist[0][-1]["elapsed_s"] == 75.0 and len(hist[1]) == 1
