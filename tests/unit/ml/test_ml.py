@@ -161,3 +161,13 @@ def test_load_window_set_is_disk_backed_and_matches_serving_normalization(
     np.testing.assert_array_equal(again.X, ws.X)
     assert sorted(f.name for f in tmp_path.glob("X_norm_*")) == files
     del ws, again  # release the maps so Windows can delete tmp_path
+
+
+def test_paired_diff_uses_only_shared_subjects() -> None:
+    from neurostream_ml.report_tables import paired_diff
+
+    a = {"1": 0.5, "2": 0.6, "3": 0.7, "9": 0.0}
+    b = {"1": 0.4, "2": 0.5, "3": 0.6}
+    mean, lo, hi, n = paired_diff(a, b)
+    assert n == 3 and mean == pytest.approx(0.1)
+    assert lo == pytest.approx(0.1) and hi == pytest.approx(0.1)

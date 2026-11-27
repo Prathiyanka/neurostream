@@ -109,7 +109,7 @@ def train_eegnet(
             loss.backward()
             opt.step()
             model.apply_max_norm()
-            total += float(loss) * len(b)
+            total += loss.item() * len(b)
             n += len(b)
         val_pred = predict_proba(model, X, val_idx).argmax(1)
         score = float(balanced_accuracy_score(y_val, val_pred))
