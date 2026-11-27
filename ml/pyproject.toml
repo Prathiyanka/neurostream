@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neurostream-ml"
+version = "0.1.0"
+description = "NeuroStream training pipeline: CSP+LDA baseline, EEGNet, subject-wise evaluation, ONNX export"
+requires-python = ">=3.11"
+
+[tool.setuptools]
+packages = ["neurostream_ml"]
