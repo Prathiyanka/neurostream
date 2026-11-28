@@ -141,6 +141,7 @@ def stream_accounting(r: SyncRedis) -> dict[str, int]:
     return {
         "entries_added": int(info["entries-added"]),
         "acked": m.get("acked", 0),
+        "stale": m.get("stale", 0),
         "lost_trimmed_undelivered": m.get("lost_trimmed_undelivered", 0),
         "lost_trimmed_pending": m.get("lost_trimmed_pending", 0),
         "dead_lettered": m.get("dead_lettered", 0),

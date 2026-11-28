@@ -48,6 +48,7 @@ class Counters:
     predictions: int = 0
     reclaimed: int = 0
     dead_lettered: int = 0
+    stale: int = 0
     errors: int = 0
     pad_short: int = 0
     started_at: float = field(default_factory=time.time)
@@ -179,15 +180,29 @@ class Worker:
             return 0
         read_ts = time.time()
         jobs: list[tuple[str, WindowJob, Prepared]] = []
+        stale_ids: list[str] = []
+        oldest_s = 0.0
         for entry, deliveries in items:
             try:
                 job = decode_window_job(entry[1])
+                age_s = read_ts - job.ingest_ts
+                if self.s.stale_after_s and age_s > self.s.stale_after_s:
+                    # Too late to be useful live: skip it (no preprocessing, no inference).
+                    stale_ids.append(entry[0])
+                    oldest_s = max(oldest_s, age_s)
+                    continue
                 prepared = self.model.prepare(job, self._session_channels(job.session_id))
             except (JobError, KeyError, ValueError) as exc:
                 # Deterministic: retrying cannot help, so set it aside now.
                 self._dead_letter(entry, f"{type(exc).__name__}: {exc}", deliveries)
                 continue
             jobs.append((entry[0], job, prepared))
+        if stale_ids:
+            self.counters.stale += self.streams.ack_stale(stale_ids)
+            log.warning(
+                "skipped stale jobs",
+                extra={"n": len(stale_ids), "oldest_s": round(oldest_s, 2)},
+            )
         if not jobs:
             return len(items)
 
@@ -262,6 +277,7 @@ class Worker:
                 "predictions": c.predictions,
                 "reclaimed": c.reclaimed,
                 "dead_lettered": c.dead_lettered,
+                "stale": c.stale,
                 "errors": c.errors,
             },
         )

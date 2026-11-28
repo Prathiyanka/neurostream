@@ -21,8 +21,15 @@ class Settings:
     worker_id: str = field(default_factory=_default_worker_id)
     batch_max: int = 32  # upper bound only: a read returns whatever is available, never waits
     block_ms: int = 1000  # how long an idle worker sleeps on the stream before re-checking
-    reclaim_interval_s: float = 1.0  # how often to look for jobs a dead worker left pending
-    reclaim_min_idle_ms: int = 5000  # a pending job this old is presumed abandoned
+    reclaim_interval_s: float = 0.5  # how often to look for jobs a dead worker left pending
+    # A pending job idle this long is presumed abandoned. Well below stale_after_s, so a
+    # dead worker's jobs are recovered while still fresh; ~100x a normal batch (~10 ms), so
+    # a live worker's jobs are not taken from it.
+    reclaim_min_idle_ms: int = 1000
+    # Jobs whose window completed longer ago than this are skipped (acked, no prediction)
+    # and counted as `stale`: under overload a late prediction is worth less than catching
+    # up. 0 disables the check.
+    stale_after_s: float = 2.0
     max_deliveries: int = 3  # a job delivered more often than this is dead-lettered
     ort_threads: int = 1  # one thread per worker; scale out with more workers
     predictions_maxlen: int = 100_000
@@ -51,4 +58,5 @@ class Settings:
             heartbeat_interval_s=float(_env("HEARTBEAT_INTERVAL_S", str(cls.heartbeat_interval_s))),
             heartbeat_ttl_s=int(_env("HEARTBEAT_TTL_S", str(cls.heartbeat_ttl_s))),
             fault_delay_s=float(_env("WORKER_FAULT_DELAY_S", str(cls.fault_delay_s))),
+            stale_after_s=float(_env("STALE_AFTER_S", str(cls.stale_after_s))),
         )

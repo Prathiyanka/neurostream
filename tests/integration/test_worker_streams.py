@@ -35,7 +35,9 @@ def register_session(r: Redis, session_id: str = "s1") -> None:
     r.hset(keys.session_meta(session_id), mapping={"ch_names": json.dumps(EEGMMIDB_CHANNELS)})
 
 
-def job_fields(end_sample: int, session_id: str = "s1", sfreq: float = 160.0) -> dict:  # type: ignore[type-arg]
+def job_fields(
+    end_sample: int, session_id: str = "s1", sfreq: float = 160.0, age_s: float = 0.0
+) -> dict:  # type: ignore[type-arg]
     rng = np.random.default_rng(end_sample)
     span = PAD + CORE
     w = Window(
@@ -44,8 +46,8 @@ def job_fields(end_sample: int, session_id: str = "s1", sfreq: float = 160.0) ->
         labels=np.full(span, 1, np.int8),
         pad_samples=PAD,
     )
-    now = time.time()
-    return encode_window_job(WindowJob(session_id, w, sfreq, ingest_ts=now, emitted_ts=now))
+    t = time.time() - age_s  # when the window completed at ingest
+    return encode_window_job(WindowJob(session_id, w, sfreq, ingest_ts=t, emitted_ts=t))
 
 
 def add_jobs(r: Redis, n: int, start: int = 0, maxlen: int | None = None) -> None:
@@ -231,3 +233,33 @@ def test_a_modified_model_file_is_refused(tmp_path: Path) -> None:
     (d / "model.onnx").write_bytes(bytes(data))
     with pytest.raises(ModelCardError, match="sha256"):
         load_model_card(d)
+
+
+def test_stale_jobs_are_skipped_and_counted_separately(sync_redis: Redis) -> None:
+    register_session(sync_redis)
+    w = make_worker(stale_after_s=2.0)
+    w.start()
+    for i, age in enumerate([5.0, 0.0, 3.0, 0.1, 2.5]):
+        sync_redis.xadd(keys.WINDOWS_STREAM, job_fields(1000 + 80 * i, age_s=age))  # type: ignore[arg-type]
+    w.run_until_idle()
+    preds = predictions(sync_redis)
+    assert sorted(p.window_end_sample for p in preds) == [1080, 1240]  # only the fresh ones
+    assert all(p.batch_size == 2 for p in preds)  # stale jobs never reach inference
+    acc = stream_accounting(sync_redis)
+    assert acc["stale"] == 3 and acc["acked"] == 2
+    assert acc["lost_trimmed_undelivered"] == acc["lost_trimmed_pending"] == 0  # not "lost"
+    assert acc["pending"] == 0
+    assert_conserved(acc)
+    w.heartbeat(force=True)
+    hb = sync_redis.hgetall(keys.worker_heartbeat("w1"))
+    assert int(hb[b"stale"]) == 3
+
+
+def test_stale_check_can_be_disabled(sync_redis: Redis) -> None:
+    register_session(sync_redis)
+    w = make_worker(stale_after_s=0.0)
+    w.start()
+    sync_redis.xadd(keys.WINDOWS_STREAM, job_fields(1000, age_s=60.0))  # type: ignore[arg-type]
+    w.run_until_idle()
+    assert len(predictions(sync_redis)) == 1
+    assert stream_accounting(sync_redis)["stale"] == 0

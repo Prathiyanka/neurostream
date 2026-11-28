@@ -20,7 +20,7 @@ Both are added to ``ns:metrics:workers`` (``lost_trimmed_undelivered``,
 ``lost_trimmed_pending``). Then, once the stream is drained, this always holds
 (tested in ``test_worker_streams.py``)::
 
-    entries-added = acked + lost_trimmed_undelivered + lost_trimmed_pending
+    entries-added = acked + stale + lost_trimmed_undelivered + lost_trimmed_pending
                     + dead_lettered + pending + lag
 
 Assumption: nothing deletes entries from ``ns:windows`` with ``XDEL`` (it would make
@@ -66,12 +66,13 @@ if n > 0 then redis.call('HINCRBY', KEYS[2], 'delivered', n) end
 return {res, skipped, after['last-delivered-id']}
 """
 
-# KEYS: stream, metrics hash. ARGV: group, ids... Acks and counts in one step, so `acked`
-# counts each job exactly once even if two workers both processed it (only one ack wins).
+# KEYS: stream, metrics hash. ARGV: group, counter, ids... Acks and counts in one step, so
+# the counter (`acked` for predicted jobs, `stale` for skipped ones) counts each job exactly
+# once even if two workers both handled it (only one ack wins).
 ACK_SCRIPT = r"""
-local n = redis.call('XACK', KEYS[1], ARGV[1], unpack(ARGV, 2))
-redis.call('HINCRBY', KEYS[2], 'acked', n)
-local missed = #ARGV - 1 - n
+local n = redis.call('XACK', KEYS[1], ARGV[1], unpack(ARGV, 3))
+redis.call('HINCRBY', KEYS[2], ARGV[2], n)
+local missed = #ARGV - 2 - n
 if missed > 0 then redis.call('HINCRBY', KEYS[2], 'ack_misses', missed) end
 return n
 """
@@ -187,10 +188,17 @@ class JobStreams:
                 pipe.hincrby(self.metrics_key, name, value)
         if ack_ids:
             self._ack(
-                keys=[self.stream, self.metrics_key], args=[self.group, *ack_ids], client=pipe
+                keys=[self.stream, self.metrics_key],
+                args=[self.group, "acked", *ack_ids],
+                client=pipe,
             )
         results = pipe.execute()  # type: ignore[no-untyped-call]
         return int(results[-1]) if ack_ids else 0
+
+    def ack_stale(self, ids: Sequence[str]) -> int:
+        """Acknowledge jobs skipped as too old, counting them as `stale` (not `acked`)."""
+        n = self._ack(keys=[self.stream, self.metrics_key], args=[self.group, "stale", *ids])
+        return int(n)
 
     def dead_letter(self, entry: Entry, reason: str, deliveries: int, maxlen: int) -> None:
         entry_id, fields = entry

@@ -54,6 +54,13 @@ async def replay(
         **kw,  # type: ignore[arg-type]
     )
     await SessionStreamer(cfg, rec).run()
+    # Ingest flushes asynchronously after `end`; it marks the session ended once flushed.
+    meta = keys.session_meta(session_id)
+    for _ in range(500):
+        if await server.redis.hget(meta, "status") == b"ended":  # type: ignore[misc]
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"session {session_id} never reached 'ended'")
 
 
 async def wait_until(cond: Callable[[], bool], timeout: float, what: str) -> None:
@@ -111,6 +118,7 @@ async def check_matches_offline(
     preds = all_predictions(sync_redis)
     assert n_emitted > 0
     assert {p.window_id for p in preds} == emitted_window_ids(sync_redis)
+
     assert len(preds) == n_emitted  # no duplicates without a crash
     pad = decode_window_job(
         sync_redis.xrange(keys.WINDOWS_STREAM, count=1)[0][1]
@@ -170,8 +178,9 @@ def spawn_worker(worker_id: str, log_path: Path, **env: str) -> subprocess.Popen
 async def test_killing_a_worker_mid_stream_loses_no_windows(
     ingest_server: IngestServer, sync_redis: SyncRedis, tmp_path: Path
 ) -> None:
-    # Slow workers (0.3 s per batch) so the victim is certain to hold unacked jobs.
-    slow = {"WORKER_FAULT_DELAY_S": "0.3", "WORKER_BATCH_MAX": "4"}
+    # Slow workers (0.3 s per batch) so the victim is certain to hold unacked jobs. The stale
+    # check is off here: this test is about recovery, and must see every window predicted.
+    slow = {"WORKER_FAULT_DELAY_S": "0.3", "WORKER_BATCH_MAX": "4", "STALE_AFTER_S": "0"}
     victim = spawn_worker("victim", tmp_path / "victim.log", **slow)
     survivor = spawn_worker("survivor", tmp_path / "survivor.log", **slow)
     try:
