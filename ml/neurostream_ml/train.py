@@ -3,6 +3,10 @@
 Splits are passed as *index arrays* into one shared window array, never as copies:
 ``X[train_idx]`` on the 64-channel set would duplicate about 1.4 GB. Only one batch at a
 time is gathered and converted to float32.
+
+With ``resume_path`` the full training state (model, optimizer, both RNGs, early-stopping
+bookkeeping) is written after every epoch, so a killed run continues from its last
+finished epoch and produces exactly the same model as an uninterrupted one.
 """
 
 from __future__ import annotations
@@ -10,7 +14,10 @@ from __future__ import annotations
 import copy
 import logging
 import time
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -77,14 +84,29 @@ def predict_proba(
     return np.concatenate(out) if out else np.empty((0, 3), np.float32)
 
 
+def _save_atomic(obj: dict[str, Any], path: Path) -> None:
+    """Write to a temp file then rename, so a kill mid-write never leaves a corrupt file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    torch.save(obj, tmp)
+    tmp.replace(path)
+
+
 def train_eegnet(
     X: npt.NDArray[np.floating],
     y: npt.NDArray[np.integer],
     train_sel: npt.NDArray[np.bool_] | IndexArray,
     val_sel: npt.NDArray[np.bool_] | IndexArray,
     cfg: TrainConfig,
+    resume_path: Path | None = None,
+    on_epoch_end: Callable[[int], None] | None = None,
 ) -> TrainResult:
-    """Train on ``X[train_sel]``, early-stop on ``X[val_sel]``. ``X`` is never copied."""
+    """Train on ``X[train_sel]``, early-stop on ``X[val_sel]``. ``X`` is never copied.
+
+    ``resume_path``: per-epoch training state; resumed from if it exists. The caller
+    deletes it once the final model is saved. ``on_epoch_end`` runs after each epoch's
+    state is saved (tests use it to simulate a kill).
+    """
     torch.manual_seed(cfg.seed)
     torch.set_num_threads(cfg.threads)
     rng = np.random.default_rng(cfg.seed)
@@ -99,8 +121,25 @@ def train_eegnet(
 
     best_state, best_epoch, best_score, since_best = None, -1, -1.0, 0
     history: list[dict[str, float]] = []
-    start = time.perf_counter()
-    for epoch in range(cfg.epochs):
+    first_epoch, prior_seconds = 0, 0.0
+    if resume_path is not None and resume_path.exists():
+        st = torch.load(resume_path, weights_only=False)  # our own file: holds RNG states
+        if st["train_config"] != asdict(cfg):
+            raise SystemExit(f"{resume_path} was written with {st['train_config']}, not {cfg}")
+        if st["n_train"] != len(train_idx) or st["n_val"] != len(val_idx):
+            raise SystemExit(f"{resume_path} was written for a different split")
+        model.load_state_dict(st["model"])
+        opt.load_state_dict(st["optimizer"])
+        rng.bit_generator.state = st["numpy_rng"]
+        torch.set_rng_state(st["torch_rng"])
+        best_state, best_epoch, best_score = st["best_state"], st["best_epoch"], st["best_score"]
+        since_best, history = st["since_best"], st["history"]
+        first_epoch, prior_seconds = st["epoch"] + 1, st["seconds"]
+        log.info("resumed from %s after epoch %d", resume_path, st["epoch"])
+    start = time.perf_counter() - prior_seconds
+    for epoch in range(first_epoch, cfg.epochs):
+        if since_best >= cfg.patience:
+            break  # the saved state had already early-stopped
         model.train()
         total, n = 0.0, 0
         for b in _batches(train_idx, cfg.batch_size, rng):
@@ -130,8 +169,30 @@ def train_eegnet(
             )
         else:
             since_best += 1
-            if since_best >= cfg.patience:
-                break
+        if resume_path is not None:
+            _save_atomic(
+                {
+                    "epoch": epoch,
+                    "model": model.state_dict(),
+                    "optimizer": opt.state_dict(),
+                    "numpy_rng": rng.bit_generator.state,
+                    "torch_rng": torch.get_rng_state(),
+                    "best_state": best_state,
+                    "best_epoch": best_epoch,
+                    "best_score": best_score,
+                    "since_best": since_best,
+                    "history": history,
+                    "seconds": time.perf_counter() - start,
+                    "train_config": asdict(cfg),
+                    "n_train": len(train_idx),
+                    "n_val": len(val_idx),
+                },
+                resume_path,
+            )
+        if on_epoch_end is not None:
+            on_epoch_end(epoch)
+        if since_best >= cfg.patience:
+            break
     assert best_state is not None
     model.load_state_dict(best_state)
     model.eval()

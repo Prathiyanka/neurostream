@@ -86,6 +86,48 @@ def test_training_loop_runs_and_restores_best_model() -> None:
     np.testing.assert_allclose(predict_proba(res.model, X2, np.arange(10)), proba, atol=1e-6)
 
 
+class _Killed(Exception):
+    pass
+
+
+def test_resumed_training_matches_uninterrupted(tmp_path: Path) -> None:
+    """Killed after epoch 1 and resumed: same history, same best epoch, same weights."""
+    X, y = synthetic_mi(n=192)
+    cfg = TrainConfig(epochs=4, patience=4, threads=1)
+    full = train_eegnet(X, y, np.arange(64, 192), np.arange(64), cfg)
+
+    resume = tmp_path / "fold.resume.pt"
+
+    def kill(epoch: int) -> None:
+        if epoch == 1:
+            raise _Killed
+
+    with pytest.raises(_Killed):
+        train_eegnet(X, y, np.arange(64, 192), np.arange(64), cfg, resume, kill)
+    assert torch.load(resume, weights_only=False)["epoch"] == 1
+    resumed = train_eegnet(X, y, np.arange(64, 192), np.arange(64), cfg, resume)
+
+    assert resumed.history == full.history
+    assert resumed.best_epoch == full.best_epoch
+    for k, v in full.model.state_dict().items():
+        torch.testing.assert_close(resumed.model.state_dict()[k], v, rtol=0, atol=0)
+
+
+def test_resume_refuses_a_different_config(tmp_path: Path) -> None:
+    X, y = synthetic_mi(n=192)
+    resume = tmp_path / "fold.resume.pt"
+    train_eegnet(X, y, np.arange(64, 192), np.arange(64), TrainConfig(epochs=1, threads=1), resume)
+    with pytest.raises(SystemExit, match="written with"):
+        train_eegnet(
+            X,
+            y,
+            np.arange(64, 192),
+            np.arange(64),
+            TrainConfig(epochs=1, lr=0.01, threads=1),
+            resume,
+        )
+
+
 def test_training_with_index_arrays_matches_training_on_copies() -> None:
     """Index-based training (no copies) is the same computation as training on a slice."""
     X, y = synthetic_mi(n=192)

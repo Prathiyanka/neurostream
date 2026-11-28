@@ -231,7 +231,8 @@ def run_eegnet_cross(
             ckpt = torch.load(ckpt_file, weights_only=True)
             rec = _rescore_checkpoint(i, f, ws, ckpt, log_hist.get(i, []))
         else:
-            res = train_eegnet(ws.X, ws.y, ws.mask(f.train), ws.mask(f.val), cfg)
+            resume = ckpt_file.with_suffix(".resume.pt")
+            res = train_eegnet(ws.X, ws.y, ws.mask(f.train), ws.mask(f.val), cfg, resume)
             extra = {
                 "best_epoch": res.best_epoch,
                 "val_bal_acc": res.best_val_bal_acc,
@@ -250,6 +251,7 @@ def run_eegnet_cross(
                 },
                 ckpt_file,
             )
+            resume.unlink(missing_ok=True)  # final model saved: per-epoch state not needed
             rec = _fold_record(i, f, ws, res.model, extra)
         results["folds"] = sorted([*results["folds"], rec], key=lambda r: r["fold"])
         save(name, results)  # after every fold: a kill loses at most the fold in progress
