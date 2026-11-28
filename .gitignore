@@ -40,3 +40,7 @@ Thumbs.db
 # Logs
 *.log
 ml/results/checkpoints/
+
+# Playwright
+dashboard/test-results/
+dashboard/playwright-report/
