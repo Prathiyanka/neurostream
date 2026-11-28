@@ -215,3 +215,15 @@ def test_paired_diff_uses_only_shared_subjects() -> None:
     mean, lo, hi, n = paired_diff(a, b)
     assert n == 3 and mean == pytest.approx(0.1)
     assert lo == pytest.approx(0.1) and hi == pytest.approx(0.1)
+
+
+def test_report_splice_keeps_prose_and_replaces_tables() -> None:
+    from neurostream_ml.report_tables import BEGIN, END, splice
+
+    doc = f"# Title\nprose\n{BEGIN}\nold table\n{END}\nafter\n"
+    out = splice(doc, "new table")
+    assert out.startswith("# Title\nprose\n") and out.endswith(f"{END}\nafter\n")
+    assert "new table" in out and "old table" not in out
+    assert splice(out, "new table") == out  # idempotent
+    with pytest.raises(SystemExit):
+        splice("no markers", "x")

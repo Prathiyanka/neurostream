@@ -247,13 +247,35 @@ def build_report(results: Path) -> str:
     return "\n".join(out)
 
 
-def main() -> None:
+BEGIN, END = "<!-- BEGIN GENERATED TABLES -->", "<!-- END GENERATED TABLES -->"
+
+
+def splice(doc: str, tables: str) -> str:
+    """Replace the text between the generated-table markers, keeping the prose around it."""
+    head, sep1, rest = doc.partition(BEGIN)
+    _, sep2, tail = rest.partition(END)
+    if not (sep1 and sep2):
+        raise SystemExit(f"markers {BEGIN} / {END} not found")
+    note = "<!-- python -m neurostream_ml.report_tables --update docs/MODEL_RESULTS.md -->"
+    return f"{head}{BEGIN}\n{note}\n\n{tables.strip()}\n\n{END}{tail}"
+
+
+def main(argv: list[str] | None = None) -> None:
+    import argparse
     import sys
 
     from neurostream_ml.common import RESULTS_DIR
 
+    p = argparse.ArgumentParser()
+    p.add_argument("--update", type=Path, help="rewrite the generated section of this file")
+    args = p.parse_args(argv)
+    tables = build_report(RESULTS_DIR)
+    if args.update:
+        doc = args.update.read_text(encoding="utf-8")
+        args.update.write_bytes(splice(doc, tables).encode("utf-8"))
+        return
     sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
-    print(build_report(RESULTS_DIR))
+    print(tables)
 
 
 if __name__ == "__main__":
