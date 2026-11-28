@@ -3,6 +3,7 @@
 -r services/ingest/requirements.txt
 -r services/replayer/requirements.txt
 -r services/worker/requirements.txt
+-r services/api/requirements.txt
 -r ml/requirements.txt
 -e ./services/common
 -e ./ml

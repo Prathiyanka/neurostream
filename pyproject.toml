@@ -19,16 +19,16 @@ strict = true
 ignore_missing_imports = true
 files = ["scripts", "services", "ml"]
 explicit_package_bases = true
-mypy_path = ["services/common", "services/ingest", "services/replayer", "services/worker", "ml"]
+mypy_path = ["services/common", "services/ingest", "services/replayer", "services/worker", "services/api", "ml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-pythonpath = ["scripts", "services/ingest", "services/replayer", "services/worker", "ml"]
+pythonpath = ["scripts", "services/ingest", "services/replayer", "services/worker", "services/api", "ml"]
 markers = [
   "integration: needs running infrastructure (docker compose up). Deselect with -m 'not integration'.",
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["neurostream_common", "neurostream_ml", "ingest", "replayer", "worker", "download_data", "tests"]
+known-first-party = ["neurostream_common", "neurostream_ml", "ingest", "replayer", "worker", "api", "download_data", "tests"]
