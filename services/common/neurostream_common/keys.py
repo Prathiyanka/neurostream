@@ -8,6 +8,7 @@ PREDICTIONS_STREAM = "ns:predictions"  # durable: the API persists from here (Ph
 PREDICTIONS_CHANNEL = "ns:predictions:live"  # pub/sub fan-out for live views (lossy)
 WORKER_METRICS = "ns:metrics:workers"  # counters summed over all workers
 WORKERS_SET = "ns:workers"
+MODEL_ACTIVE = "ns:model:active"  # model id (<name>-<version>) workers should serve
 
 
 def worker_heartbeat(worker_id: str) -> str:

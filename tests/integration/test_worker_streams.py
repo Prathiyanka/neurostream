@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import shutil
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -25,6 +26,7 @@ from tests.integration.conftest import (
     stream_accounting,
     worker_metrics,
 )
+from worker.loop import Worker
 
 pytestmark = pytest.mark.integration
 
@@ -263,3 +265,50 @@ def test_stale_check_can_be_disabled(sync_redis: Redis) -> None:
     w.run_until_idle()
     assert len(predictions(sync_redis)) == 1
     assert stream_accounting(sync_redis)["stale"] == 0
+
+
+def _step_until(w: Worker, cond: Callable[[], bool], timeout: float = 15.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not cond():
+        assert time.monotonic() < deadline, "condition not reached"
+        w.step()
+
+
+def test_hot_swap_changes_the_model_between_batches_without_losing_jobs(
+    sync_redis: Redis,
+) -> None:
+    register_session(sync_redis)
+    w = make_worker(block_ms=20)
+    w.start()
+    add_jobs(sync_redis, 4)
+    w.run_until_idle()
+    sync_redis.set(keys.MODEL_ACTIVE, "eegnet-motor-1.0.0")
+    add_jobs(sync_redis, 4, start=4)  # served while the new model loads in the background
+    _step_until(w, lambda: w.model.model_id == "eegnet-motor-1.0.0")
+    add_jobs(sync_redis, 4, start=8)
+    w.run_until_idle()
+    preds = sorted(predictions(sync_redis), key=lambda p: p.window_end_sample)
+    models = [p.model for p in preds]
+    assert len(preds) == 12
+    assert models[:4] == [SERVED_MODEL] * 4 and models[-4:] == ["eegnet-motor-1.0.0"] * 4
+    acc = stream_accounting(sync_redis)
+    assert acc["acked"] == 12 and acc["pending"] == 0
+    assert_conserved(acc)
+    w.heartbeat(force=True)
+    assert sync_redis.hget(keys.worker_heartbeat("w1"), "model") == b"eegnet-motor-1.0.0"
+
+
+def test_a_model_that_fails_to_load_is_reported_and_the_old_one_kept(
+    sync_redis: Redis,
+) -> None:
+    register_session(sync_redis)
+    w = make_worker(block_ms=20)
+    w.start()
+    sync_redis.set(keys.MODEL_ACTIVE, "eegnet-motor-9.9.9")
+    _step_until(w, lambda: bool(w.model_error))
+    assert w.model.model_id == SERVED_MODEL and "not found" in w.model_error
+    add_jobs(sync_redis, 2)
+    w.run_until_idle()
+    assert [p.model for p in predictions(sync_redis)] == [SERVED_MODEL] * 2
+    w.heartbeat(force=True)
+    assert b"not found" in sync_redis.hget(keys.worker_heartbeat("w1"), "model_error")  # type: ignore[operator]

@@ -16,9 +16,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 from redis import Redis
@@ -33,6 +35,7 @@ from neurostream_common.codec import (
     encode_prediction,
 )
 from neurostream_common.labels import UNKNOWN
+from neurostream_common.model_card import load_model_card
 from worker.model import InferenceModel, JobError, Prepared
 from worker.settings import Settings
 from worker.streams import Entry, JobStreams
@@ -65,6 +68,13 @@ class Worker:
         self._next_reclaim = 0.0
         self._next_heartbeat = 0.0
         self._stopping = False
+        # Model hot-swap: a new model is loaded and warmed up on a background thread while
+        # this one keeps serving, then swapped in between two batches.
+        self._next_model_check = 0.0
+        self._loader: threading.Thread | None = None
+        self._loaded: InferenceModel | None = None
+        self._failed_model: str | None = None  # not retried until the requested id changes
+        self.model_error = ""
 
     # ---- lifecycle -------------------------------------------------------------------
 
@@ -105,6 +115,7 @@ class Worker:
 
     def step(self) -> int:
         """One iteration. Returns the number of jobs handled (0 = was idle)."""
+        self._maybe_swap_model()
         handled = 0
         now = time.monotonic()
         if now >= self._next_reclaim:
@@ -134,6 +145,49 @@ class Worker:
                 return total
             total += n
         return total
+
+    # ---- model hot-swap --------------------------------------------------------------
+
+    def _maybe_swap_model(self) -> None:
+        loaded = self._loaded
+        if loaded is not None:  # finished loading: swap now, between two batches
+            previous, self.model, self._loaded = self.model.model_id, loaded, None
+            self._loader = None
+            log.info("model swapped", extra={"from": previous, "to": loaded.model_id})
+            self.heartbeat(force=True)
+            return
+        if self._loader is not None:
+            return  # still loading; keep serving with the current model
+        now = time.monotonic()
+        if now < self._next_model_check:
+            return
+        self._next_model_check = now + self.s.model_check_interval_s
+        raw = self.r.get(keys.MODEL_ACTIVE)
+        if raw is None:
+            return
+        want = raw.decode() if isinstance(raw, bytes) else str(raw)
+        if want == self.model.model_id:
+            self._failed_model, self.model_error = None, ""
+            return
+        if want == self._failed_model:
+            return
+        self._loader = threading.Thread(target=self._load, args=(want,), daemon=True)
+        self._loader.start()
+
+    def _load(self, model_id: str) -> None:
+        try:
+            card = load_model_card(Path(self.s.model_dir) / model_id)  # verifies the sha256
+            model = InferenceModel(card, self.s.ort_threads)
+            model.warm_up(self.s.batch_max)
+        except Exception as exc:
+            self._failed_model, self.model_error = model_id, f"{type(exc).__name__}: {exc}"
+            self._loader = None
+            log.error(
+                "could not load model, keeping the current one",
+                extra={"model": model_id, "err": str(exc)},
+            )
+            return
+        self._loaded = model
 
     # ---- reclaiming ------------------------------------------------------------------
 
@@ -271,6 +325,8 @@ class Worker:
                 "worker_id": self.s.worker_id,
                 "pid": os.getpid(),
                 "model": self.model.model_id,
+                "model_error": self.model_error,
+                "model_loading": int(self._loader is not None),
                 "started_at": c.started_at,
                 "last_seen": time.time(),
                 "batches": c.batches,

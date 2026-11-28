@@ -35,6 +35,7 @@ class Settings:
     predictions_maxlen: int = 100_000
     dead_maxlen: int = 1000
     heartbeat_interval_s: float = 1.0
+    model_check_interval_s: float = 1.0  # how often to look for a new active model
     heartbeat_ttl_s: int = 5
     # Fault injection for tests and demos: hold every batch this long before publishing,
     # to simulate a slow or overloaded worker. Always 0 in normal operation.
@@ -57,6 +58,9 @@ class Settings:
             dead_maxlen=int(_env("DEAD_MAXLEN", str(cls.dead_maxlen))),
             heartbeat_interval_s=float(_env("HEARTBEAT_INTERVAL_S", str(cls.heartbeat_interval_s))),
             heartbeat_ttl_s=int(_env("HEARTBEAT_TTL_S", str(cls.heartbeat_ttl_s))),
+            model_check_interval_s=float(
+                _env("MODEL_CHECK_INTERVAL_S", str(cls.model_check_interval_s))
+            ),
             fault_delay_s=float(_env("WORKER_FAULT_DELAY_S", str(cls.fault_delay_s))),
             stale_after_s=float(_env("STALE_AFTER_S", str(cls.stale_after_s))),
         )

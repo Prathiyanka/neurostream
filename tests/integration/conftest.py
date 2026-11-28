@@ -106,6 +106,7 @@ def make_worker(worker_id: str = "w1", **overrides: Any) -> Worker:
         "worker_id": worker_id,
         "block_ms": 100,
         "reclaim_interval_s": 0.0,
+        "model_check_interval_s": 0.0,
     }
     s = WorkerSettings(**{**defaults, **overrides})
     card = load_model_card(MODEL_DIR / s.model)
