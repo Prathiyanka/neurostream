@@ -21,7 +21,8 @@ import numpy as np
 import onnxruntime as ort
 
 from neurostream_common.eegmmidb import MOTOR_IMAGERY_RUNS, load_run
-from neurostream_common.preprocessing import PreprocessConfig, WindowPreprocessor
+from neurostream_common.model_card import ModelCard
+from neurostream_common.preprocessing import WindowPreprocessor
 from neurostream_common.windowing import WindowSpec, extract_windows
 from neurostream_ml.common import DATA_DIR, RESULTS_DIR, setup_logging
 from neurostream_ml.metrics import summarize
@@ -37,17 +38,8 @@ def session(path: Path, threads: int = 1) -> ort.InferenceSession:
 
 
 def preprocessor_from_card(card: dict[str, Any], ch_names: list[str]) -> WindowPreprocessor:
-    p = card["preprocessing"]
-    cfg = PreprocessConfig(
-        sfreq=p["sfreq"],
-        l_freq=p["l_freq"],
-        h_freq=p["h_freq"],
-        order=p["order"],
-        init=p["init"],
-        normalize=p["normalize"],
-        channels=tuple(p["channels"]),
-    )
-    return WindowPreprocessor(cfg, ch_names)
+    """Same construction the worker uses (``neurostream_common.model_card``)."""
+    return WindowPreprocessor(ModelCard(Path("."), card).preprocess_config(), ch_names)
 
 
 def pad_sweep(model_dir: Path) -> dict[str, Any]:
