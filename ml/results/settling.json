@@ -1,0 +1,149 @@
+{
+ "filter": {
+  "sfreq": 160.0,
+  "l_freq": 8.0,
+  "h_freq": 30.0,
+  "order": 4,
+  "init": "steady",
+  "normalize": true,
+  "channels": null
+ },
+ "impulse": {
+  "amplitude_below_0.01_of_peak_s": 0.31875,
+  "amplitude_below_0.001_of_peak_s": 0.50625,
+  "energy_0.99_s": 0.16875,
+  "energy_0.999_s": 0.25
+ },
+ "empirical_steady_init": [
+  {
+   "pad_s": 0.0,
+   "n_windows": 1200,
+   "core_rel_rms_median": 0.1527026999221127,
+   "core_rel_rms_p95": 0.28083537905170053,
+   "first100ms_rel_rms_median": 0.7514042276399,
+   "first100ms_rel_rms_p95": 0.9639807367531366
+  },
+  {
+   "pad_s": 0.0625,
+   "n_windows": 1200,
+   "core_rel_rms_median": 0.06323919956928524,
+   "core_rel_rms_p95": 0.13954112317789086,
+   "first100ms_rel_rms_median": 0.3066963178566281,
+   "first100ms_rel_rms_p95": 0.5877851454180945
+  },
+  {
+   "pad_s": 0.125,
+   "n_windows": 1200,
+   "core_rel_rms_median": 0.03149665882895909,
+   "core_rel_rms_p95": 0.06577307172359635,
+   "first100ms_rel_rms_median": 0.14967948788395166,
+   "first100ms_rel_rms_p95": 0.33529639403435435
+  },
+  {
+   "pad_s": 0.25,
+   "n_windows": 1200,
+   "core_rel_rms_median": 0.006661440272741589,
+   "core_rel_rms_p95": 0.015561297352395276,
+   "first100ms_rel_rms_median": 0.03114647439413382,
+   "first100ms_rel_rms_p95": 0.07093188526629357
+  },
+  {
+   "pad_s": 0.375,
+   "n_windows": 1200,
+   "core_rel_rms_median": 0.0014693203656991134,
+   "core_rel_rms_p95": 0.0036069233956738116,
+   "first100ms_rel_rms_median": 0.006939443507463115,
+   "first100ms_rel_rms_p95": 0.017383881764460093
+  },
+  {
+   "pad_s": 0.5,
+   "n_windows": 1200,
+   "core_rel_rms_median": 0.0003181933394340438,
+   "core_rel_rms_p95": 0.0007182110430021104,
+   "first100ms_rel_rms_median": 0.0014709473628098631,
+   "first100ms_rel_rms_p95": 0.00375697650658439
+  },
+  {
+   "pad_s": 0.75,
+   "n_windows": 1200,
+   "core_rel_rms_median": 1.4513754675229232e-05,
+   "core_rel_rms_p95": 3.423520182589811e-05,
+   "first100ms_rel_rms_median": 6.803303858644916e-05,
+   "first100ms_rel_rms_p95": 0.00016651543378987427
+  },
+  {
+   "pad_s": 1.0,
+   "n_windows": 1200,
+   "core_rel_rms_median": 6.878909913895241e-07,
+   "core_rel_rms_p95": 1.5101856474644992e-06,
+   "first100ms_rel_rms_median": 3.214515149687116e-06,
+   "first100ms_rel_rms_p95": 7.69765748988758e-06
+  }
+ ],
+ "empirical_zero_init": [
+  {
+   "pad_s": 0.0,
+   "n_windows": 1200,
+   "core_rel_rms_median": 0.1933715668725009,
+   "core_rel_rms_p95": 0.3951301418191816,
+   "first100ms_rel_rms_median": 0.9029358230955447,
+   "first100ms_rel_rms_p95": 1.7687084908170625
+  },
+  {
+   "pad_s": 0.0625,
+   "n_windows": 1200,
+   "core_rel_rms_median": 0.08988357355872437,
+   "core_rel_rms_p95": 0.23372067636535396,
+   "first100ms_rel_rms_median": 0.41871807529574495,
+   "first100ms_rel_rms_p95": 1.0590469723343805
+  },
+  {
+   "pad_s": 0.125,
+   "n_windows": 1200,
+   "core_rel_rms_median": 0.04317487373242057,
+   "core_rel_rms_p95": 0.11405382199706646,
+   "first100ms_rel_rms_median": 0.20632037981367418,
+   "first100ms_rel_rms_p95": 0.5468103597938739
+  },
+  {
+   "pad_s": 0.25,
+   "n_windows": 1200,
+   "core_rel_rms_median": 0.009761604505039857,
+   "core_rel_rms_p95": 0.023124283215178364,
+   "first100ms_rel_rms_median": 0.04630763698244046,
+   "first100ms_rel_rms_p95": 0.11810535138740662
+  },
+  {
+   "pad_s": 0.375,
+   "n_windows": 1200,
+   "core_rel_rms_median": 0.002125380260669692,
+   "core_rel_rms_p95": 0.005368023352470982,
+   "first100ms_rel_rms_median": 0.01014646398240672,
+   "first100ms_rel_rms_p95": 0.029283206865677217
+  },
+  {
+   "pad_s": 0.5,
+   "n_windows": 1200,
+   "core_rel_rms_median": 0.00044664399912445443,
+   "core_rel_rms_p95": 0.0011088540354481063,
+   "first100ms_rel_rms_median": 0.0021357193322100194,
+   "first100ms_rel_rms_p95": 0.0059590040044995235
+  },
+  {
+   "pad_s": 0.75,
+   "n_windows": 1200,
+   "core_rel_rms_median": 2.1647082968383484e-05,
+   "core_rel_rms_p95": 5.200286561805968e-05,
+   "first100ms_rel_rms_median": 0.0001019379937370023,
+   "first100ms_rel_rms_p95": 0.00026647398118415696
+  },
+  {
+   "pad_s": 1.0,
+   "n_windows": 1200,
+   "core_rel_rms_median": 9.802883375712137e-07,
+   "core_rel_rms_p95": 2.4428279464704824e-06,
+   "first100ms_rel_rms_median": 4.614482880001923e-06,
+   "first100ms_rel_rms_p95": 1.259594388493983e-05
+  }
+ ]
+}

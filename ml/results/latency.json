@@ -1,0 +1,67 @@
+{
+ "n_windows": 2000,
+ "threads": 1,
+ "note": "single process, 1 ORT thread, this laptop CPU",
+ "rows": [
+  {
+   "model": "eegnet-motor",
+   "n_channels": 21,
+   "pad_s": 0.5,
+   "job_bytes_model_channels": 33600,
+   "job_bytes_all_channels": 102400,
+   "redis_kbps_per_session_model_channels": 67.2,
+   "preprocess_ms_p50": 0.5075000008218922,
+   "preprocess_ms_p95": 0.6458999996539205,
+   "inference_ms_p50": 0.38810000114608556,
+   "inference_ms_p95": 0.46409999740717456,
+   "total_ms_p50": 0.8978500045486726,
+   "total_ms_p95": 1.099954999881447,
+   "total_ms_p99": 1.519940997241065
+  },
+  {
+   "model": "eegnet-motor",
+   "n_channels": 21,
+   "pad_s": 1.0,
+   "job_bytes_model_channels": 40320,
+   "job_bytes_all_channels": 122880,
+   "redis_kbps_per_session_model_channels": 80.64,
+   "preprocess_ms_p50": 0.5290499975671992,
+   "preprocess_ms_p95": 0.6682049952360103,
+   "inference_ms_p50": 0.3952000042772852,
+   "inference_ms_p95": 0.481915001728339,
+   "total_ms_p50": 0.9282499959226698,
+   "total_ms_p95": 1.1576049961149693,
+   "total_ms_p99": 1.505849998211488
+  },
+  {
+   "model": "eegnet-all",
+   "n_channels": 64,
+   "pad_s": 0.5,
+   "job_bytes_model_channels": 102400,
+   "job_bytes_all_channels": 102400,
+   "redis_kbps_per_session_model_channels": 204.8,
+   "preprocess_ms_p50": 0.771400002122391,
+   "preprocess_ms_p95": 0.9515349982393673,
+   "inference_ms_p50": 1.0436000011395663,
+   "inference_ms_p95": 1.1950349969993113,
+   "total_ms_p50": 1.8204499974672217,
+   "total_ms_p95": 2.1540500012633856,
+   "total_ms_p99": 2.763938996431534
+  },
+  {
+   "model": "eegnet-all",
+   "n_channels": 64,
+   "pad_s": 1.0,
+   "job_bytes_model_channels": 122880,
+   "job_bytes_all_channels": 122880,
+   "redis_kbps_per_session_model_channels": 245.76,
+   "preprocess_ms_p50": 0.8113500007311814,
+   "preprocess_ms_p95": 1.0802200016769345,
+   "inference_ms_p50": 1.0310500038031023,
+   "inference_ms_p95": 1.2626600026123924,
+   "total_ms_p50": 1.8473999989510048,
+   "total_ms_p95": 2.318349999040947,
+   "total_ms_p99": 2.993329001110396
+  }
+ ]
+}

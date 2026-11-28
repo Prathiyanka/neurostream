@@ -9,7 +9,7 @@ fist) with a model trained on the PhysioNet EEGMMIDB dataset, and shows everythi
 dashboard. A replayer service plays recorded EEG as if it came from a live headset, so the
 rest of the system works the same with real hardware.
 
-**Status:** Phase 2 (replayer + ingest) of 8. See [`PROJECT_SPEC.md`](PROJECT_SPEC.md) for the full plan.
+**Status:** Phase 3 (ML training) of 8 done. See [`PROJECT_SPEC.md`](PROJECT_SPEC.md) for the full plan.
 
 ## Architecture
 
@@ -24,8 +24,25 @@ rest of the system works the same with real hardware.
                                [Postgres]
 ```
 
-Built so far: replayer, ingest, the shared `neurostream_common` package, Redis, Postgres.
-Workers, API and dashboard come in later phases.
+Built so far: replayer, ingest, the shared `neurostream_common` package, Redis, Postgres,
+and the trained, ONNX-exported model. Workers, API and dashboard come in later phases.
+
+## Model results (Phase 3)
+
+Three classes (rest / imagined left fist / imagined right fist), evaluated on **people the
+model never saw** (5-fold cross-subject over 106 subjects). Full write-up, including what
+did not work: [`docs/MODEL_RESULTS.md`](docs/MODEL_RESULTS.md).
+
+| Model | Balanced accuracy (chance 33.3%) | 95% CI over subjects |
+|---|---|---|
+| CSP+LDA, 21 motor channels (baseline) | 43.3% | 41.4% to 45.1% |
+| **EEGNet, 21 motor channels (served)** | **45.7%** | 43.7% to 47.7% |
+| EEGNet, all 64 channels | 46.7% | 44.8% to 48.7% |
+
+EEGNet beats the baseline by +2.4 pt (paired over subjects, CI +1.1 to +3.8). All 64
+channels add +1.1 pt, which is not distinguishable from zero (CI −0.2 to +2.4), at 3x the
+data per window and twice the latency, so the 21-channel model is the one served. Filter +
+ONNX inference takes 0.93 ms per window (p50, one CPU thread).
 
 ## Quickstart (so far)
 
@@ -80,7 +97,8 @@ with `--drop-prob`, `--duplicate-prob`, `--reorder-prob`, `--jitter-ms`,
 | `ml/` | CSP+LDA baseline, EEGNet training, subject-wise evaluation, ONNX export |
 | `scripts/` | Cross-platform helper scripts (Python, so they work on Windows) |
 | `tests/` | `unit/` and `integration/` pytest suites |
-| `docs/` | Model results, benchmarks |
+| `models/` | Exported ONNX models + model cards (each ~30 KB, committed so workers run without training) |
+| `docs/` | Dataset notes, model results, benchmarks |
 
 ## Design decisions (so far)
 
@@ -133,6 +151,19 @@ with `--drop-prob`, `--duplicate-prob`, `--reorder-prob`, `--jitter-ms`,
 - **Wire formats:** JSON over WebSocket from the device (easy to debug, and Pydantic
   validates it). Raw little-endian float32 bytes inside Redis (compact, and decoding is a
   zero-copy view). Whether JSON parsing becomes the bottleneck is measured in Phase 7.
+- **Evaluate on unseen people, report balanced accuracy, bootstrap over subjects.** Half
+  the windows are `rest`, so plain accuracy rewards "always rest" with 49.5%. Windows from
+  one person are correlated, so CIs resample subjects, not windows, and model comparisons
+  are paired per subject. See [`docs/MODEL_RESULTS.md`](docs/MODEL_RESULTS.md).
+- **The model card is the train/serve contract.** Each exported model ships with the
+  channels, filter, pad and normalization it was trained with, plus a SHA-256 of the ONNX
+  file (weights embedded, so the hash covers them). Workers rebuild their input from the
+  card, and the exported model is re-scored through the exact float32 serving path.
+- **Long training runs are resumable and deterministic.** Results are saved after every
+  fold and the full training state (model, optimizer, both RNGs) after every epoch. A
+  resumed run is bit-identical to an uninterrupted one (tested). Indexing one memory-mapped
+  window array instead of copying splits keeps the 64-channel set (1.7 GB) from being
+  duplicated in RAM.
 - **Python helper scripts instead of a Makefile** so everything runs on Windows.
 - **Integration tests are marked** (`-m integration`) so unit tests run without Docker;
   CI runs both, with Redis and Postgres as service containers.
@@ -141,7 +172,8 @@ with `--drop-prob`, `--duplicate-prob`, `--reorder-prob`, `--jitter-ms`,
 
 Python 3.11, asyncio, FastAPI, WebSockets, Pydantic v2, NumPy, MNE-Python, Redis Streams,
 PostgreSQL, Docker Compose, pytest (+ pytest-asyncio), ruff, mypy (strict), GitHub Actions.
-(Later: PyTorch, ONNX Runtime, SQLAlchemy/Alembic, React, TypeScript, Vite.)
+PyTorch, ONNX / ONNX Runtime, scikit-learn.
+(Later: SQLAlchemy/Alembic, React, TypeScript, Vite.)
 
 ## What I learned
 
@@ -151,6 +183,15 @@ PostgreSQL, Docker Compose, pytest (+ pytest-asyncio), ruff, mypy (strict), GitH
   logging *which* window was missing (start sample 96, not 0) pointed straight at it.
 - Consumer groups and stateful stream processing don't mix without extra design work.
   That one realization drove the whole window-job architecture.
+- A model can fail for honest reasons. Within-subject EEGNet scored chance (34.7%). Before
+  calling it a bug I checked the evidence: training loss stayed at ln 3 (uniform guessing),
+  predictions collapsed onto one class, and each person has only ~130 windows. The same
+  code reaches 46% across subjects. The lesson: tiny data needs either a low-capacity model
+  (CSP+LDA gets 50 to 54%) or fine-tuning a pretrained one.
+- Measure before optimizing. The obvious fix for memory pressure during training was a
+  smaller batch, but measuring showed the process used the same ~1.5 GB at batch 16 and
+  64, so batch size was not the lever (and changing it mid-experiment would have made
+  the folds incomparable). Making the run resumable per epoch was the real fix.
 
 ## License
 
