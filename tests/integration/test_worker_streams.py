@@ -89,7 +89,8 @@ def test_predictions_are_published_then_acked(sync_redis: Redis) -> None:
         assert p.predicted_class == int(np.argmax(p.probabilities))
         assert p.true_label == 1 and p.model == SERVED_MODEL and not p.reclaimed
         assert min(p.queue_ms, p.preprocess_ms, p.inference_ms) >= 0
-        assert p.latency_ms >= p.queue_ms
+        assert p.latency_ms == pytest.approx(p.ingest_ms + p.queue_ms + p.worker_ms, abs=1e-6)
+        assert p.worker_ms >= p.inference_ms
     acc = stream_accounting(sync_redis)
     assert acc["acked"] == 5 and acc["pending"] == 0 and acc["lag"] == 0
     assert_conserved(acc)

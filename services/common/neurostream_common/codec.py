@@ -161,7 +161,8 @@ class Prediction:
     queue_ms: float  # job produced -> read by the worker (ingest buffer, Redis, waiting)
     preprocess_ms: float  # this window's filter + normalization
     inference_ms: float  # the whole batched ONNX call this window was part of
-    latency_ms: float  # end to end: window_end_ts -> publish_ts
+    worker_ms: float  # read by the worker -> publish_ts (whole batch's preprocessing included)
+    latency_ms: float  # end to end: window_end_ts -> publish_ts = ingest + queue + worker
     publish_ts: float
 
     def to_json(self) -> str:
@@ -177,6 +178,7 @@ _PRED_FLOAT = (
     "queue_ms",
     "preprocess_ms",
     "inference_ms",
+    "worker_ms",
     "latency_ms",
     "publish_ts",
 )

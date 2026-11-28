@@ -69,6 +69,20 @@ class InferenceModel:
         ms = (time.perf_counter() - t0) * 1000
         return Prepared(np.asarray(x, dtype=np.float32), ms, w.pad_samples < self._pad_samples)
 
+    def warm_up(self, batch_max: int, rounds: int = 3) -> float:
+        """Run the model on dummy input for every batch size up to ``batch_max``.
+
+        Measured: without this, a freshly started worker's first seconds of real traffic
+        had inference calls of 17 to 100 ms (vs. ~2 ms when warm), as ONNX Runtime grows
+        its memory arena and caches are cold. Returns the seconds spent."""
+        t0 = time.perf_counter()
+        n_ch = int(self.card.raw["input"]["shape"][2])
+        x = np.zeros((n_ch, self.card.n_times), np.float32)
+        for _ in range(rounds):
+            for b in range(1, batch_max + 1):
+                self.infer([x] * b)
+        return time.perf_counter() - t0
+
     def infer(self, xs: Sequence[npt.NDArray[np.float32]]) -> npt.NDArray[np.float32]:
         """Class probabilities for a batch of prepared windows, in one ONNX call."""
         batch = np.stack(xs)[:, None, :, :]  # (batch, 1, channels, times)

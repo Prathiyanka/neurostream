@@ -82,6 +82,7 @@ def test_prediction_round_trips_through_stream_fields_and_json() -> None:
         queue_ms=1.5,
         preprocess_ms=0.4,
         inference_ms=1.2,
+        worker_ms=1.9,
         latency_ms=3.9,
         publish_ts=1700000000.2539,
     )

@@ -68,6 +68,9 @@ class Worker:
     # ---- lifecycle -------------------------------------------------------------------
 
     def start(self) -> None:
+        # Warm up before joining: the first real batches would otherwise be slow.
+        warm_s = self.model.warm_up(self.s.batch_max)
+        log.info("model warmed up", extra={"seconds": round(warm_s, 3)})
         self.streams.ensure_group()
         self.heartbeat(force=True)
         log.info(
@@ -217,6 +220,7 @@ class Worker:
                 queue_ms=(read_ts - job.emitted_ts) * 1000,
                 preprocess_ms=prep.preprocess_ms,
                 inference_ms=inference_ms,
+                worker_ms=(publish_ts - read_ts) * 1000,
                 latency_ms=(publish_ts - job.ingest_ts) * 1000,
                 publish_ts=publish_ts,
             )
