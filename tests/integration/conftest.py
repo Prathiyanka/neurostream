@@ -26,7 +26,7 @@ from worker.settings import Settings as WorkerSettings
 TEST_REDIS_DB = 15
 
 
-def test_redis_url() -> str:
+def redis_test_url() -> str:
     base = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
     return base.rsplit("/", 1)[0] + f"/{TEST_REDIS_DB}"
 
@@ -46,7 +46,7 @@ class IngestServer:
 
 @pytest.fixture
 async def redis_client() -> AsyncIterator[Redis]:
-    r = Redis.from_url(test_redis_url())
+    r = Redis.from_url(redis_test_url())
     await r.flushdb()
     yield r
     await r.flushdb()
@@ -54,9 +54,11 @@ async def redis_client() -> AsyncIterator[Redis]:
 
 
 @pytest.fixture
-def ingest_settings() -> Settings:
-    """Override in a test module (or with indirect parametrization) to change ingest config."""
-    return Settings(redis_url=test_redis_url())
+def ingest_settings(request: pytest.FixtureRequest) -> Settings:
+    """Ingest config; override fields per test with
+    ``@pytest.mark.parametrize("ingest_settings", [{...}], indirect=True)``."""
+    overrides: dict[str, Any] = getattr(request, "param", {})
+    return Settings(redis_url=redis_test_url(), **overrides)
 
 
 @pytest.fixture
@@ -88,7 +90,7 @@ SERVED_MODEL = "eegnet-motor-1.0.1"
 
 @pytest.fixture
 def sync_redis() -> Iterator[SyncRedis]:
-    r = SyncRedis.from_url(test_redis_url())
+    r = SyncRedis.from_url(redis_test_url())
     r.flushdb()
     yield r
     r.flushdb()
@@ -98,7 +100,7 @@ def sync_redis() -> Iterator[SyncRedis]:
 def make_worker(worker_id: str = "w1", **overrides: Any) -> Worker:
     """A worker on the test database with the served model and fast test timings."""
     defaults: dict[str, Any] = {
-        "redis_url": test_redis_url(),
+        "redis_url": redis_test_url(),
         "model_dir": str(MODEL_DIR),
         "model": SERVED_MODEL,
         "worker_id": worker_id,
