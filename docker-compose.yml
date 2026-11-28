@@ -45,6 +45,27 @@ services:
       redis:
         condition: service_healthy
 
+  # Stateless inference workers. Scale out with:  docker compose up -d --scale worker=3
+  worker:
+    build:
+      context: .
+      dockerfile: services/worker/Dockerfile
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      MODEL: ${MODEL:-eegnet-motor-1.0.1}
+      ORT_THREADS: ${ORT_THREADS:-1}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    # Healthy while this container's worker heartbeat key exists (it has a 5 s TTL).
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,socket,sys,redis; r=redis.Redis.from_url(os.environ['REDIS_URL']); sys.exit(0 if r.exists('ns:worker:%s-1' % socket.gethostname()) else 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      redis:
+        condition: service_healthy
+
   # On-demand device simulator (not started by `up`; the API will drive it in Phase 5):
   #   docker compose run --rm replayer --subjects 1 2 --speed 1
   replayer:
