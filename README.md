@@ -9,7 +9,7 @@ fist) with a model trained on the PhysioNet EEGMMIDB dataset, and shows everythi
 dashboard. A replayer service plays recorded EEG as if it came from a live headset, so the
 rest of the system works the same with real hardware.
 
-**Status:** Phase 3 (ML training) of 8 done. See [`PROJECT_SPEC.md`](PROJECT_SPEC.md) for the full plan.
+**Status:** Phase 4 (inference workers) of 8 done. See [`PROJECT_SPEC.md`](PROJECT_SPEC.md) for the full plan.
 
 ## Architecture
 
@@ -24,8 +24,26 @@ rest of the system works the same with real hardware.
                                [Postgres]
 ```
 
-Built so far: replayer, ingest, the shared `neurostream_common` package, Redis, Postgres,
-and the trained, ONNX-exported model. Workers, API and dashboard come in later phases.
+Built so far: replayer, ingest, inference workers, the shared `neurostream_common`
+package, Redis, Postgres, and the trained, ONNX-exported model. Predictions land in the
+`ns:predictions` stream (durable) and on the `ns:predictions:live` pub/sub channel. The API
+and dashboard come in Phases 5 and 6.
+
+## System latency (Phase 4)
+
+10 held-out subjects streamed concurrently at real-time speed through the whole stack
+(replayer → ingest → Redis → worker → published prediction), 3 runs per configuration.
+Full method and analysis: [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+
+| Workers | Latency p50 | p95 (target < 50 ms) | p99 | Windows lost |
+|---|---|---|---|---|
+| 1 | 14.2 to 18.9 ms | **32.8 to 37.9 ms** | 40.2 to 47.7 ms | 0 of 3,480 |
+| 3 | 8.8 to 10.1 ms | **21.6 to 45.8 ms** | 28.4 to 108.0 ms | 0 of 3,480 |
+
+Ranges are over the 3 runs. Most of the time is queueing behind a burst (all 10 sessions'
+windows complete together every 0.5 s), not compute: inference is about 2 ms per batch. The
+3-worker tail is noisy because of host-level CPU stalls on this laptop (Docker Desktop on
+Windows); the benchmark page shows how that was diagnosed.
 
 ## Model results (Phase 3)
 
@@ -42,7 +60,7 @@ did not work: [`docs/MODEL_RESULTS.md`](docs/MODEL_RESULTS.md).
 EEGNet beats the baseline by +2.4 pt (paired over subjects, CI +1.1 to +3.8). All 64
 channels add +1.1 pt, which is not distinguishable from zero (CI −0.2 to +2.4), at 3x the
 data per window and twice the latency, so the 21-channel model is the one served. Filter +
-ONNX inference takes 0.93 ms per window (p50, one CPU thread).
+ONNX inference takes 0.90 ms per window (p50, one CPU thread, offline benchmark).
 
 ## Quickstart (so far)
 
@@ -54,7 +72,8 @@ python -m venv .venv
 pip install -r requirements-dev.txt
 copy .env.example .env            # macOS/Linux: cp .env.example .env
 
-docker compose up -d --wait       # Postgres, Redis, ingest (http://localhost:8001/health)
+docker compose up -d --wait       # Postgres, Redis, ingest (http://localhost:8001/health), 1 worker
+docker compose up -d --wait --scale worker=3     # more workers: same consumer group
 
 python scripts/download_data.py --subjects 1-5   # or omit --subjects for all 109 (~1 GB)
 pytest                            # unit + integration tests (integration needs the stack up)
@@ -70,6 +89,10 @@ docker compose run --rm replayer --url ws://ingest:8001/ws/device --data-dir /da
 
 # Or from the host, without the dataset (synthetic signal)
 python -m replayer --synthetic 3 --speed 5 --max-seconds 20
+
+# Watch predictions, and measure latency (10 held-out subjects in real time)
+docker compose exec redis redis-cli XREVRANGE ns:predictions + - COUNT 1
+python scripts/measure_latency.py --sessions 10 --workers 1 --seconds 60
 ```
 
 Example (real output from the run above): the replayer reports what it injected, and
@@ -77,8 +100,8 @@ ingest's counters in Redis (`ns:metrics:ingest:<session>`) match it exactly:
 
 | session | sent | dropped | duplicated | ingest accepted | ingest duplicates | ingest gaps | windows |
 |---|---|---|---|---|---|---|---|
-| sub001 | 294 | 6 | 5 | 294 | 5 | 6 | 55 |
-| sub002 | 291 | 9 | 4 | 291 | 4 | 9 | 55 |
+| sub001 | 294 | 6 | 5 | 294 | 5 | 6 | 56 |
+| sub002 | 291 | 9 | 4 | 291 | 4 | 9 | 56 |
 
 Replayer flags: `--speed`, `--loop`, `--max-seconds`, `--chunk-size`, and fault injection
 with `--drop-prob`, `--duplicate-prob`, `--reorder-prob`, `--jitter-ms`,
@@ -91,13 +114,14 @@ with `--drop-prob`, `--duplicate-prob`, `--reorder-prob`, `--jitter-ms`,
 | `services/common` | `neurostream_common`: schemas, sequence tracking, windowing, codecs, shared by services **and** `ml/` |
 | `services/replayer` | Streams EDF recordings at real-time rate, with fault injection |
 | `services/ingest` | WebSocket ingest, validation, gap/duplicate detection → Redis Streams |
-| `services/worker` | Streaming filter, windowing, ONNX inference (consumer groups) |
+| `services/worker` | Stateless inference workers: batched ONNX inference via a Redis consumer group, reclaiming, dead letters, loss accounting |
 | `services/api` | REST + WebSocket API, Postgres persistence, model hot-swap |
 | `dashboard/` | React + TypeScript + Vite live dashboard |
 | `ml/` | CSP+LDA baseline, EEGNet training, subject-wise evaluation, ONNX export |
 | `scripts/` | Cross-platform helper scripts (Python, so they work on Windows) |
 | `tests/` | `unit/` and `integration/` pytest suites |
 | `models/` | Exported ONNX models + model cards (each ~30 KB, committed so workers run without training) |
+| `benchmarks/results/` | Raw latency benchmark results (JSON), summarized in `docs/BENCHMARKS.md` |
 | `docs/` | Dataset notes, model results, benchmarks |
 
 ## Design decisions (so far)
@@ -113,25 +137,52 @@ with `--drop-prob`, `--duplicate-prob`, `--reorder-prob`, `--jitter-ms`,
 - **Stateless workers via self-contained window jobs.** The spec had workers read raw packets
   through a consumer group. But a consumer group hands each message to *any* worker, while
   causal filtering and sliding windows need the session's recent history. So ingest builds
-  the windows instead. Each job carries the 2 s window plus 1 s of earlier samples, so the
-  filter has settled before it reaches the part that gets classified. Any worker can then
+  the windows instead. Each job carries the 2 s window plus 0.5 s of earlier samples (the
+  pad), so the filter has settled before it reaches the part that gets classified. The pad
+  was 1 s until Phase 3 measured the filter's settling time; 0.5 s costs no accuracy. Any worker can then
   process any job: scaling is just "start more workers", and a crashed worker's pending
   jobs can be reclaimed by another with nothing to rebuild.
-  - *Cost:* data amplification. Each 64 x 480 float32 job is 123 KB and there are 2 per
-    second, about 246 KB/s per session versus 41 KB/s of raw signal (6x, i.e.
-    span / step = 480 / 80). At 50 sessions that's about 12 MB/s through Redis: fine on
-    one host, but it's the first thing to optimize (channel subset, float16, shorter
-    padding once Phase 3 measures the filter's real settling time).
+  - *Cost:* data amplification. Each 64 x 400 float32 job is 102 KB and there are 2 per
+    second, about 205 KB/s per session versus 41 KB/s of raw signal (5x, i.e.
+    span / step = 400 / 80). At 50 sessions that's about 10 MB/s through Redis: fine on
+    one host. Next optimizations, to be justified by Phase 7 load tests: send only the
+    model's 21 channels (3x less), or float16.
   - *Alternative rejected:* sticky session-to-worker assignment (leases). It's less data,
     but rebalancing and crash recovery are harder (the new owner must rebuild filter
     state), and that's exactly the part the project needs to show is correct.
   - Windows have a deterministic id `session:end_sample`, so a window reprocessed after
     a crash can be de-duplicated downstream.
+- **Workers: take what is available, publish, then acknowledge.** A worker reads up to 32
+  jobs but never waits for a batch to fill: if one job is there, it processes one. Batches
+  form on their own under bursts, which is exactly when one ONNX call for many windows
+  pays off. Predictions are published (durable stream + live pub/sub) *before* the job is
+  acknowledged, so a crash can produce a duplicate prediction but never lose one
+  (at-least-once; the deterministic window id lets the API de-duplicate).
+- **Crash recovery: reclaim, then dead-letter.** Every second, each worker takes over jobs
+  another worker has held unacknowledged for 5 s (`XAUTOCLAIM`). A job that can never work
+  (wrong sampling rate, unknown session) is set aside in `ns:windows:dead` at once; one
+  delivered more than 3 times is too, so a poison message cannot crash workers forever.
+- **Lost jobs are counted, exactly.** `ns:windows` is capped (`MAXLEN ~ 5000`) so an
+  overload cannot exhaust Redis memory, but trimming deletes jobs whether or not anyone
+  acknowledged them. Redis 7 keeps a consumer group's `entries-read` as a position in
+  everything ever added, so a read that jumps over trimmed jobs reveals how many it
+  skipped. Workers read through a small Lua script that checks the position before and
+  after the read *atomically*, which keeps the count exact with many workers reading.
+  Trimmed jobs that were pending show up when they are reclaimed. Tests check that the
+  books balance: `entries-added = acked + lost + dead-lettered + pending + lag`.
+- **Workers refuse a model whose hash does not match its card**, and warm the model up
+  (dummy batches of every size) before taking traffic: measured, a cold worker's first
+  inference calls took up to 101 ms instead of ~2 ms.
+- **Latency is measured on every prediction, by stage.** Each prediction carries ingest,
+  queue and worker times that add up to the total, plus its batch size. That is what
+  showed queueing, not compute, dominates (see [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)).
 - **Training and serving share one windowing implementation.** `neurostream_common.windowing`
   has an offline `extract_windows` (training) and a `StreamingWindower` (ingest). A test feeds
   the same signal through both in chunk sizes from 1 to 500 and requires byte-identical
-  windows. An end-to-end test checks that what lands in Redis equals the offline windows.
-  This prevents train/serve skew, a classic silent accuracy killer.
+  windows. End-to-end tests check that what lands in Redis equals the offline windows, and
+  that the predictions the running system publishes for a held-out subject equal the
+  offline pipeline's to 2e-6. This prevents train/serve skew, a classic silent accuracy
+  killer.
 - **Sequence policy: detect, don't reorder.** Packet seq ahead of expected = gap (packets
   presumed lost); behind = *late* if it was marked missing, otherwise *duplicate*. There is
   no reorder buffer, because it would add latency to every packet to fix a rare event.
@@ -172,7 +223,7 @@ with `--drop-prob`, `--duplicate-prob`, `--reorder-prob`, `--jitter-ms`,
 
 Python 3.11, asyncio, FastAPI, WebSockets, Pydantic v2, NumPy, MNE-Python, Redis Streams,
 PostgreSQL, Docker Compose, pytest (+ pytest-asyncio), ruff, mypy (strict), GitHub Actions.
-PyTorch, ONNX / ONNX Runtime, scikit-learn.
+PyTorch, ONNX / ONNX Runtime, scikit-learn, Redis consumer groups and Lua scripting.
 (Later: SQLAlchemy/Alembic, React, TypeScript, Vite.)
 
 ## What I learned
@@ -192,6 +243,13 @@ PyTorch, ONNX / ONNX Runtime, scikit-learn.
   smaller batch, but measuring showed the process used the same ~1.5 GB at batch 16 and
   64, so batch size was not the lever (and changing it mid-experiment would have made
   the folds incomparable). Making the run resumable per epoch was the real fix.
+- Don't trust a guess about a system you can test in a minute. Whether Redis's consumer
+  group counters stay correct when `MAXLEN` trims entries decided the whole loss-accounting
+  design, so I checked it against a real Redis 7.4 with exact numbers (17 skipped, 3
+  pending trimmed) before writing any worker code.
+- One benchmark run is not a result. Identical 10-stream runs differed by nearly 4x at p99.
+  Grouping the slow windows by time showed they came in bursts where *every* stage slowed
+  down at once, which points at the host (CPU taken away from the Docker VM), not the code.
 
 ## License
 

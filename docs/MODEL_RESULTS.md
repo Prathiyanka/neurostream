@@ -11,12 +11,13 @@ the bottom are generated from those files, not typed in.
 
 | | |
 |---|---|
-| Served model | **EEGNet, 21 motor channels** (`models/eegnet-motor-1.0.0`) |
+| Served model | **EEGNet, 21 motor channels** (`models/eegnet-motor-1.0.1`) |
 | Cross-subject balanced accuracy (unseen people) | **45.7%** (95% CI 43.7% to 47.7%), chance = 33.3% |
 | Subjects above chance | 97 / 106 |
 | vs. CSP+LDA baseline, same channels (paired) | **+2.4 pt** (95% CI +1.1 to +3.8) |
-| Serving latency, filter + ONNX inference, per window | **0.93 ms p50, 1.51 ms p99** (1 CPU thread) |
-| Window job size / Redis traffic per session | 40.3 KB per job, 80.6 KB/s |
+| Compute per window, filter + ONNX inference (0.5 s pad) | **0.90 ms p50, 1.52 ms p99** (1 CPU thread, offline benchmark) |
+| Window job size / Redis traffic per session (0.5 s pad) | 102.4 KB, 204.8 KB/s as sent today (64 ch); 33.6 KB, 67.2 KB/s if only the 21 model channels were sent |
+| End-to-end latency through the running system | see [`BENCHMARKS.md`](BENCHMARKS.md) |
 
 The cross-subject numbers pool the 5 fold models, each scored on the people it never saw:
 that is the estimate of how the method does on a new person. The exported file is the
@@ -108,9 +109,10 @@ spread between people.
 - **Filter settling and pad length:** the band-pass impulse response falls below 1% of its
   peak after 0.32 s and below 0.1% after 0.51 s. With 0.5 s of pad, the filtered window
   differs from a fully settled one by 0.03% RMS (median). Accuracy is within 0.1 pt from 0.375
-  to 1 s of pad and within 0.2 pt at 0.25 s. **Proposal for Phase 4:** serve with a 0.5 s pad
-  instead of 1 s: 17% smaller window jobs (33.6 vs. 40.3 KB) at no measurable accuracy cost.
-  Not applied yet, because it changes the ingest default.
+  to 1 s of pad and within 0.2 pt at 0.25 s. **Applied in Phase 4:** the system serves with a
+  0.5 s pad instead of 1 s, which makes window jobs 17% smaller (64 channels: 102.4 vs.
+  122.9 KB) at no measurable accuracy cost. `eegnet-motor-1.0.1` is the same model
+  (identical ONNX file and SHA-256) with the 0.5 s serving pad in its card.
 - **Latency:** per-window preprocessing + inference in one process with one ONNX Runtime
   thread on a laptop CPU, 2000 windows. This is compute only; queueing and Redis round trips
   are measured end to end in Phases 4 and 7.
