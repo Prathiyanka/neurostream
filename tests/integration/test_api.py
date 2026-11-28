@@ -185,6 +185,40 @@ async def test_stopping_a_session_through_the_api(api: Api) -> None:  # noqa: F8
     assert s["status"] == "stopped" and s["ended_at"] is not None
 
 
+async def test_orphaned_sessions_are_closed_and_can_still_be_stopped(
+    api: Api,  # noqa: F811
+    sync_redis: SyncRedis,
+) -> None:
+    """The replayer restarts and forgets its replays: ingest saw the devices disconnect and
+    they never came back. Such sessions must not show as running forever."""
+    from sqlalchemy.dialects.postgresql import insert
+
+    from api.app import ORPHAN_AFTER_S, sync_session_status
+
+    now = time.time()
+    rows = [
+        {"id": "gone", "source": "api", "status": "running"},
+        {"id": "blip", "source": "api", "status": "running"},
+        {"id": "dead-replay", "source": "api", "status": "running"},
+    ]
+    sync_redis.hset(
+        keys.session_meta("gone"),
+        mapping={"status": "disconnected", "updated_at": now - ORPHAN_AFTER_S - 1},
+    )
+    sync_redis.hset(  # just reconnecting: give it time
+        keys.session_meta("blip"), mapping={"status": "disconnected", "updated_at": now - 2}
+    )
+    engine = api.app.state.engine
+    async with engine.begin() as conn:
+        await conn.execute(insert(sessions).values(rows))
+        await sync_session_status(conn, api.app.state.redis, now)
+    assert (await api.client.get("/sessions/gone")).json()["status"] == "interrupted"
+    assert (await api.client.get("/sessions/blip")).json()["status"] == "running"
+    # Stopping a session the replayer has forgotten still works.
+    stopped = await api.client.delete("/sessions/dead-replay")
+    assert stopped.status_code == 200 and stopped.json()["status"] == "stopped"
+
+
 async def test_session_errors(api: Api, sync_redis: SyncRedis) -> None:  # noqa: F811
     bad = await api.client.post("/sessions", json={"synthetic": True, "subject": 2})
     assert bad.status_code == 422  # the replayer's validation, passed through

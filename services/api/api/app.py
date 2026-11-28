@@ -183,18 +183,37 @@ async def snapshot_loop(
             log.warning("snapshot failed: %s", exc)
 
 
-async def sync_session_status(conn: Any, redis: Redis) -> None:
-    """Sessions still 'running' in Postgres whose ingest session has ended -> finished."""
+ORPHAN_AFTER_S = 30.0  # a device gone this long without ending its session
+
+
+async def sync_session_status(conn: Any, redis: Redis, now: float | None = None) -> None:
+    """Close sessions Postgres still lists as running:
+
+    * ingest saw the device send `end` -> ``finished``;
+    * ingest saw the device disconnect and it has not come back for ``ORPHAN_AFTER_S``
+      (e.g. the replayer was restarted and lost its in-memory replays) -> ``interrupted``.
+      Without this, such a session would show as running forever.
+    """
+    now = time.time() if now is None else now
     running = (
         await conn.execute(select(sessions.c.id).where(sessions.c.status == "running"))
     ).scalars()
     for sid in list(running):
-        status = await redis.hget(keys.session_meta(sid), "status")  # type: ignore[misc]
+        meta = await redis.hgetall(keys.session_meta(sid))  # type: ignore[misc]
+        status = meta.get(b"status")
+        new = None
         if status == b"ended":
+            new = "finished"
+        elif (
+            status == b"disconnected"
+            and now - float(meta.get(b"updated_at", b"0")) > ORPHAN_AFTER_S
+        ):
+            new = "interrupted"
+        if new:
             await conn.execute(
                 update(sessions)
                 .where(sessions.c.id == sid, sessions.c.status == "running")
-                .values(status="finished", ended_at=func.now())
+                .values(status=new, ended_at=func.now())
             )
 
 
@@ -315,7 +334,13 @@ def create_app(
         row = await _session_row(session_id)
         if row["source"] != "api":
             raise HTTPException(409, "session was not started through the API")
-        replay = await st("replayer").call("DELETE", f"/replays/{session_id}")
+        try:
+            replay = await st("replayer").call("DELETE", f"/replays/{session_id}")
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            # The replayer no longer knows it (restarted): the stream is gone either way.
+            replay = {"session_id": session_id, "status": "stopped", "note": "unknown to replayer"}
         status = replay["status"] if replay["status"] != "running" else "stopped"
         async with st("engine").begin() as conn:
             await conn.execute(

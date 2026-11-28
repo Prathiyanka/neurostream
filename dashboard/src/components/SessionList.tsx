@@ -5,6 +5,7 @@ const TONE: Record<Session["status"], string> = {
   finished: "",
   stopped: "warn",
   failed: "bad",
+  interrupted: "bad",
 };
 
 export function SessionList({

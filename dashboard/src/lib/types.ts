@@ -86,7 +86,7 @@ export interface Session {
   id: string;
   subject: number | null;
   source: "api" | "external";
-  status: "running" | "finished" | "stopped" | "failed";
+  status: "running" | "finished" | "stopped" | "failed" | "interrupted";
   speed: number | null;
   created_at: string;
   ended_at: string | null;

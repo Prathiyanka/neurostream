@@ -9,7 +9,7 @@ fist) with a model trained on the PhysioNet EEGMMIDB dataset, and shows everythi
 dashboard. A replayer service plays recorded EEG as if it came from a live headset, so the
 rest of the system works the same with real hardware.
 
-**Status:** Phase 5 (API + Postgres) of 8 done. See [`PROJECT_SPEC.md`](PROJECT_SPEC.md) for the full plan.
+**Status:** Phase 6 (dashboard) of 8 done. See [`PROJECT_SPEC.md`](PROJECT_SPEC.md) for the full plan.
 
 ## Architecture
 
@@ -25,21 +25,46 @@ rest of the system works the same with real hardware.
                          (raw EEG, ~2 min)                       ns:predictions:live (pub/sub)
                                     |                                      |
                                     v                                      v
-[Dashboard, Phase 6] <--/ws/live-- [API] <------ persister (consumer group "api")
+[Dashboard (nginx)] <--/ws/live-- [API] <------ persister (consumer group "api")
                                     |  REST: sessions, models, metrics
                                     v
                                [Postgres]  sessions, predictions (window_id UNIQUE),
                                            metrics snapshots, model events
 ```
 
-Built so far: everything except the dashboard (Phase 6). The API is the only thing a
-client talks to: it starts replays through the replayer service, stores every prediction
+Open **http://localhost:8080** for the dashboard. The API is the only thing a client talks
+to (the dashboard reaches it through nginx on the same origin): it starts replays through the replayer service, stores every prediction
 in Postgres exactly once, hot-swaps the served model, and streams live predictions,
 metrics and EEG traces over a WebSocket.
 
 **No authentication.** This is a local research/portfolio system: every endpoint is open
 to whoever can reach the port. Before exposing it beyond localhost it would need auth
 (and TLS), which is out of scope here.
+
+## Dashboard (Phase 6)
+
+![NeuroStream dashboard: live EEG, prediction, accuracy and latency charts with a hot-swap marker, and a killed worker shown as lost](docs/images/dashboard.png)
+
+A real session (held-out subject 1, real time, two workers). About a minute in, the model
+was hot-swapped from `motor 1.0.1` to `motor 1.0.0` (dashed markers on both charts; the
+prediction panel shows which model made each prediction), then one worker container was
+killed with `docker kill`. It stays in the worker panel as **lost**, with how long ago its
+last heartbeat was, while the other worker carries the session.
+
+- **Live EEG** for any of the 21 motor channels (C3 / Cz / C4 by default), drawn on a
+  canvas every frame; gaps from lost packets show as breaks, not interpolated lines.
+- **Prediction** with probability bars, the true label beside it, latency, batch size and
+  the worker and model that made it.
+- **Rolling balanced accuracy** (with the 33% chance line) and **latency p50 / p95** (with
+  the 50 ms target), each with a marker where the model changed.
+- **System tiles**: workers, queue depth, dropped and duplicate packets, and job outcomes
+  (stale, lost, dead-lettered, reclaimed). **Worker panel**: heartbeat age, model, status
+  (healthy / loading model / heartbeat late / model error / lost).
+- **Controls**: start a replay (recorded subject or synthetic, speed, duration, fault
+  injection), stop it, switch the session being watched, hot-swap the model.
+- **Connection badge**: Live / Connecting / "Reconnecting in N s", with automatic
+  reconnect (jittered exponential backoff, a 5 s connect timeout, and a watchdog that
+  drops a connection that goes silent).
 
 ## API (Phase 5)
 
@@ -105,10 +130,18 @@ copy .env.example .env            # macOS/Linux: cp .env.example .env
 docker compose up -d --build --wait   # everything; --build so code changes are picked up
 docker compose up -d --wait --scale worker=3     # more workers: same consumer group
 curl http://localhost:8000/health
+# Dashboard: http://localhost:8080   API docs: http://localhost:8000/docs
 
 python scripts/download_data.py --subjects 1-5   # or omit --subjects for all 109 (~1 GB)
 pytest                            # unit + integration tests (integration needs the stack up)
 pytest -m "not integration"       # unit tests only, no Docker needed
+
+cd dashboard
+npm ci
+npm run dev                       # http://localhost:5173, proxies /api and /ws to :8000
+npm test                          # Vitest: components and client logic
+npx playwright install chromium   # once
+npm run e2e                       # browser smoke test against the running stack (:8080)
 ```
 
 Stream EEG into the pipeline:
@@ -147,7 +180,7 @@ with `--drop-prob`, `--duplicate-prob`, `--reorder-prob`, `--jitter-ms`,
 | `services/ingest` | WebSocket ingest, validation, gap/duplicate detection → Redis Streams |
 | `services/worker` | Stateless inference workers: batched ONNX inference via a Redis consumer group, reclaiming, dead letters, loss accounting |
 | `services/api` | REST + WebSocket API, Postgres persistence (SQLAlchemy Core + Alembic), model hot-swap |
-| `dashboard/` | React + TypeScript + Vite live dashboard |
+| `dashboard/` | React + TypeScript + Vite live dashboard (canvas charts, no chart library), served by nginx; Vitest + Playwright tests |
 | `ml/` | CSP+LDA baseline, EEGNet training, subject-wise evaluation, ONNX export |
 | `scripts/` | Cross-platform helper scripts (Python, so they work on Windows) |
 | `tests/` | `unit/` and `integration/` pytest suites |
@@ -243,6 +276,28 @@ with `--drop-prob`, `--duplicate-prob`, `--reorder-prob`, `--jitter-ms`,
   event loop, which Windows does not use by default; asyncpg works everywhere. Alembic
   runs synchronously, where psycopg is fine. A test checks that the migration and the
   schema in code never drift apart.
+- **Dashboard: canvas, no chart library, same origin.** The EEG traces must be canvas
+  (40 Hz x several channels would be thousands of DOM nodes), so the small line charts use
+  the same approach: one rendering model, a 78 KB gzipped bundle (mostly React), and
+  hot-swap markers are a few lines. Trace samples live in ring buffers outside React state,
+  read by `requestAnimationFrame`, so React does not re-render 40 times a second. The
+  browser only talks to its own origin (`/api`, `/ws`), proxied by Vite in development and
+  nginx in the container: no CORS, identical URLs everywhere.
+- **Reconnect, tested against a real outage.** Restarting the API with the dashboard open
+  first showed one attempt hanging for 19 s (nginx waited on the stopped container with
+  its 60 s default, and the client had no connect timeout). Fixes: a 5 s connect timeout
+  in the client, a 3 s upstream connect timeout in nginx, and nginx re-resolving the API
+  through Docker's DNS, because a literal host in `proxy_pass` is resolved once and kept,
+  so a recreated API container at a new IP (verified: .8 to .9) would never be reached.
+  Recovery after the restart went from 37 s to 13 s, most of it the API starting up.
+- **Workers that vanish stay visible.** The API lists only workers with a live heartbeat
+  key, so the dashboard remembers the workers it has seen and shows a missing one as
+  *lost* for a minute. Heartbeat age is computed against the server's timestamp, not the
+  browser's clock, so a skewed laptop clock cannot make healthy workers look late.
+- **Sessions cannot stay "running" forever.** If the replayer restarts it loses its
+  in-memory replays; ingest sees those devices disconnect and never return. After 30 s
+  the API marks such sessions *interrupted*, and stopping one the replayer no longer knows
+  succeeds instead of failing.
 - **Training and serving share one windowing implementation.** `neurostream_common.windowing`
   has an offline `extract_windows` (training) and a `StreamingWindower` (ingest). A test feeds
   the same signal through both in chunk sizes from 1 to 500 and requires byte-identical
@@ -291,7 +346,8 @@ with `--drop-prob`, `--duplicate-prob`, `--reorder-prob`, `--jitter-ms`,
 Python 3.11, asyncio, FastAPI, WebSockets, Pydantic v2, NumPy, MNE-Python, Redis Streams,
 PostgreSQL, Docker Compose, pytest (+ pytest-asyncio), ruff, mypy (strict), GitHub Actions.
 PyTorch, ONNX / ONNX Runtime, scikit-learn, Redis consumer groups and Lua scripting,
-SQLAlchemy 2 (Core, asyncpg) + Alembic, httpx. (Later: React, TypeScript, Vite.)
+SQLAlchemy 2 (Core, asyncpg) + Alembic, httpx, React 19, TypeScript, Vite, Canvas 2D,
+Vitest + Testing Library, Playwright, nginx.
 
 ## What I learned
 
@@ -325,6 +381,13 @@ SQLAlchemy 2 (Core, asyncpg) + Alembic, httpx. (Later: React, TypeScript, Vite.)
   76 predictions for "73" windows: it had counted the windows before ingest finished
   flushing the session. Waiting for the session's `ended` status fixed it; the code had
   delivered and stored each window exactly once.
+
+- Test against the real failure, not only the mock. The reconnect logic passed its unit
+  tests with a fake socket; only restarting the real API showed the 19 s hang, which came
+  from nginx and a missing connect timeout, not from the backoff logic.
+- Screenshots are a test too. Looking at the first one showed "0 streaming" while a
+  session was streaming: the API counted sessions with status `connected`, but ingest
+  writes `streaming`. Every test had passed because none checked that number.
 
 ## License
 

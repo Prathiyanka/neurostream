@@ -37,7 +37,7 @@ sessions = Table(
     # "api": started through POST /sessions; "external": seen in predictions only (e.g. a
     # replayer run from the command line, or a load test).
     Column("source", String(16), nullable=False),
-    Column("status", String(16), nullable=False),  # running | finished | stopped | failed
+    Column("status", String(16), nullable=False),  # running|finished|stopped|failed|interrupted
     Column("speed", Float, nullable=True),
     Column("config", JSONB, nullable=True),  # replay request (faults, max_seconds, ...)
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
