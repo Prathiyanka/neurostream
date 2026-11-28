@@ -9,25 +9,55 @@ fist) with a model trained on the PhysioNet EEGMMIDB dataset, and shows everythi
 dashboard. A replayer service plays recorded EEG as if it came from a live headset, so the
 rest of the system works the same with real hardware.
 
-**Status:** Phase 4 (inference workers) of 8 done. See [`PROJECT_SPEC.md`](PROJECT_SPEC.md) for the full plan.
+**Status:** Phase 5 (API + Postgres) of 8 done. See [`PROJECT_SPEC.md`](PROJECT_SPEC.md) for the full plan.
 
 ## Architecture
 
 ```
-[Replayer] --WebSocket--> [Ingest] --Redis Streams--> [Inference Workers xN]
- EDF @ 160 Hz           validate, seq check,     ns:windows (consumer group)
- fault injection        build window jobs        stateless: filter + classify
-                             |                                |
-                             +--> ns:raw:{session} (traces)   v
-[React Dashboard] <--WebSocket-- [API] <--Redis pub/sub-- predictions + metrics
-                                   |
-                               [Postgres]
+                 HTTP: start / stop replays
+           +--------------------------------------+
+           |                                      |
+[Replayer service] --WebSocket--> [Ingest] --ns:windows--> [Inference workers xN]
+ "the device":                 validate, seq check,  (consumer group)  batch ONNX,
+ EDF @ 160 Hz, faults          build window jobs                       hot-swap model
+                                    |                                      |
+                         ns:raw:{session}                        ns:predictions (stream)
+                         (raw EEG, ~2 min)                       ns:predictions:live (pub/sub)
+                                    |                                      |
+                                    v                                      v
+[Dashboard, Phase 6] <--/ws/live-- [API] <------ persister (consumer group "api")
+                                    |  REST: sessions, models, metrics
+                                    v
+                               [Postgres]  sessions, predictions (window_id UNIQUE),
+                                           metrics snapshots, model events
 ```
 
-Built so far: replayer, ingest, inference workers, the shared `neurostream_common`
-package, Redis, Postgres, and the trained, ONNX-exported model. Predictions land in the
-`ns:predictions` stream (durable) and on the `ns:predictions:live` pub/sub channel. The API
-and dashboard come in Phases 5 and 6.
+Built so far: everything except the dashboard (Phase 6). The API is the only thing a
+client talks to: it starts replays through the replayer service, stores every prediction
+in Postgres exactly once, hot-swaps the served model, and streams live predictions,
+metrics and EEG traces over a WebSocket.
+
+**No authentication.** This is a local research/portfolio system: every endpoint is open
+to whoever can reach the port. Before exposing it beyond localhost it would need auth
+(and TLS), which is out of scope here.
+
+## API (Phase 5)
+
+Interactive docs at http://localhost:8000/docs once the stack is up.
+
+| Endpoint | What it does |
+|---|---|
+| `POST /sessions` | Start a replay: `{"subject": 7, "speed": 1, "max_seconds": 60, "faults": {"drop_prob": 0.02}}` (or `"synthetic": true`). Sent to the replayer service. |
+| `GET /sessions`, `GET /sessions/{id}` | Sessions from Postgres; one session's summary: predictions stored, balanced accuracy, latency p50/p95/p99, models used, ingest counters. |
+| `DELETE /sessions/{id}` | Stop a replay the API started (it still ends cleanly at ingest). |
+| `GET /sessions/{id}/predictions` | Stored predictions, in window order. |
+| `GET /models`, `PUT /models/active` | Available models, the active one and what each worker serves; hot-swap with `{"model": "eegnet-motor-1.0.0"}`. |
+| `GET /metrics`, `GET /metrics/history` | Workers, queue, job outcomes (acked / stale / lost / dead-lettered), ingest totals; history from 5 s snapshots in Postgres. |
+| `WS /ws/live?session=<id>&channels=C3,Cz,C4` | Live predictions, metrics every second, and EEG traces at 40 Hz. |
+
+Example (real run, `subject 1` at 5x speed, model hot-swapped from `eegnet-motor-1.0.1` to
+`1.0.0` three seconds in): 76 of 76 windows stored, switch at window 3519 with no gap in
+the window sequence, session latency p50 5.6 ms / p99 14.2 ms.
 
 ## System latency (Phase 4)
 
@@ -62,7 +92,7 @@ channels add +1.1 pt, which is not distinguishable from zero (CI −0.2 to +2.4)
 data per window and twice the latency, so the 21-channel model is the one served. Filter +
 ONNX inference takes 0.90 ms per window (p50, one CPU thread, offline benchmark).
 
-## Quickstart (so far)
+## Quickstart
 
 Requirements: Python 3.11+, Docker Desktop.
 
@@ -72,8 +102,9 @@ python -m venv .venv
 pip install -r requirements-dev.txt
 copy .env.example .env            # macOS/Linux: cp .env.example .env
 
-docker compose up -d --wait       # Postgres, Redis, ingest (http://localhost:8001/health), 1 worker
+docker compose up -d --build --wait   # everything; --build so code changes are picked up
 docker compose up -d --wait --scale worker=3     # more workers: same consumer group
+curl http://localhost:8000/health
 
 python scripts/download_data.py --subjects 1-5   # or omit --subjects for all 109 (~1 GB)
 pytest                            # unit + integration tests (integration needs the stack up)
@@ -112,10 +143,10 @@ with `--drop-prob`, `--duplicate-prob`, `--reorder-prob`, `--jitter-ms`,
 | Path | Purpose |
 |---|---|
 | `services/common` | `neurostream_common`: schemas, sequence tracking, windowing, codecs, shared by services **and** `ml/` |
-| `services/replayer` | Streams EDF recordings at real-time rate, with fault injection |
+| `services/replayer` | The simulated device: streams EDF recordings at real-time rate with fault injection; HTTP service (`serve`) or command line |
 | `services/ingest` | WebSocket ingest, validation, gap/duplicate detection → Redis Streams |
 | `services/worker` | Stateless inference workers: batched ONNX inference via a Redis consumer group, reclaiming, dead letters, loss accounting |
-| `services/api` | REST + WebSocket API, Postgres persistence, model hot-swap |
+| `services/api` | REST + WebSocket API, Postgres persistence (SQLAlchemy Core + Alembic), model hot-swap |
 | `dashboard/` | React + TypeScript + Vite live dashboard |
 | `ml/` | CSP+LDA baseline, EEGNet training, subject-wise evaluation, ONNX export |
 | `scripts/` | Cross-platform helper scripts (Python, so they work on Windows) |
@@ -183,6 +214,35 @@ with `--drop-prob`, `--duplicate-prob`, `--reorder-prob`, `--jitter-ms`,
 - **Latency is measured on every prediction, by stage.** Each prediction carries ingest,
   queue and worker times that add up to the total, plus its batch size. That is what
   showed queueing, not compute, dominates (see [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)).
+- **The replayer is its own service, commanded over HTTP.** The API never simulates the
+  device in its own process, so heavy replays (load tests) cannot slow the API. HTTP, not
+  a Redis command channel, because a start command needs an immediate answer (the
+  session id, or "subject 88 is excluded"), which HTTP gives as a status code. Commands
+  should also fail fast when the replayer is down instead of being queued and replayed
+  later. Load tests run the replayer's command-line mode in their own containers.
+- **Persistence: own consumer group, unique window id, ack after commit.** The API reads
+  `ns:predictions` with consumer group `api` and stores batches with
+  `INSERT ... ON CONFLICT (window_id) DO NOTHING`, acknowledging only after the commit.
+  Delivery is at-least-once (a worker crash can duplicate a prediction; so can an API
+  restart between commit and ack); the unique key makes the table exactly-once. Tested
+  with a duplicated prediction and with a persister "crashing" between read and store.
+- *Trade-off:* the persister runs inside the API process. It is simple and fast enough
+  here; if it ever falls behind, it moves to its own service unchanged, because it
+  already has its own consumer group and its own metrics (`ns:metrics:persister`).
+- **Model hot-swap without restarts.** `PUT /models/active` verifies the model's hash and
+  sets `ns:model:active`. Each worker checks it about once a second, loads and warms up
+  the new model on a background thread while serving with the old one, and swaps between
+  two batches. A model that fails to load is reported in the worker's heartbeat and the
+  old one keeps serving. New workers start on the active model.
+- **Live traces are display-only.** `/ws/live` reads the raw packets ingest stores in
+  `ns:raw:{session}` (validated, de-duplicated, unfiltered), keeps the channels a client
+  asked for and averages blocks of 4 samples (160 to 40 Hz). The model never sees this
+  path. Each client has a bounded drop-oldest queue, so a slow browser cannot slow
+  anything else.
+- **asyncpg for the API, psycopg for migrations.** psycopg's async mode needs a selector
+  event loop, which Windows does not use by default; asyncpg works everywhere. Alembic
+  runs synchronously, where psycopg is fine. A test checks that the migration and the
+  schema in code never drift apart.
 - **Training and serving share one windowing implementation.** `neurostream_common.windowing`
   has an offline `extract_windows` (training) and a `StreamingWindower` (ingest). A test feeds
   the same signal through both in chunk sizes from 1 to 500 and requires byte-identical
@@ -230,8 +290,8 @@ with `--drop-prob`, `--duplicate-prob`, `--reorder-prob`, `--jitter-ms`,
 
 Python 3.11, asyncio, FastAPI, WebSockets, Pydantic v2, NumPy, MNE-Python, Redis Streams,
 PostgreSQL, Docker Compose, pytest (+ pytest-asyncio), ruff, mypy (strict), GitHub Actions.
-PyTorch, ONNX / ONNX Runtime, scikit-learn, Redis consumer groups and Lua scripting.
-(Later: SQLAlchemy/Alembic, React, TypeScript, Vite.)
+PyTorch, ONNX / ONNX Runtime, scikit-learn, Redis consumer groups and Lua scripting,
+SQLAlchemy 2 (Core, asyncpg) + Alembic, httpx. (Later: React, TypeScript, Vite.)
 
 ## What I learned
 
@@ -257,6 +317,14 @@ PyTorch, ONNX / ONNX Runtime, scikit-learn, Redis consumer groups and Lua script
 - One benchmark run is not a result. Identical 10-stream runs differed by nearly 4x at p99.
   Grouping the slow windows by time showed they came in bursts where *every* stage slowed
   down at once, which points at the host (CPU taken away from the Docker VM), not the code.
+
+- Check what is actually running. The first hot-swap test through Docker "failed": the
+  worker container was still an image built before hot-swap existed, because
+  `docker compose up` reuses images. The quickstart now says `--build`.
+- A flaky count is often a race in the test, not the code. An end-to-end test briefly saw
+  76 predictions for "73" windows: it had counted the windows before ingest finished
+  flushing the session. Waiting for the session's `ended` status fixed it; the code had
+  delivered and stored each window exactly once.
 
 ## License
 
