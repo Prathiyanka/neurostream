@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import onnx
 import onnxruntime as ort
 import torch
 
@@ -48,6 +49,12 @@ def export_onnx(model: EEGNet, path: Path, opset: int = 18) -> float:
         dynamo=True,
         verbose=False,
     )
+    # The exporter puts the weights in a side file (model.onnx.data). Fold them back in:
+    # the model is ~10 KB, and one file means the model card's sha256 covers the weights,
+    # so a swapped or corrupted weight file cannot pass the integrity check.
+    side = path.with_name(path.name + ".data")
+    onnx.save(onnx.load(str(path)), str(path), save_as_external_data=False)
+    side.unlink(missing_ok=True)
     sess = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
     x = torch.randn(32, 1, cfg["n_channels"], cfg["n_times"])
     with torch.no_grad():

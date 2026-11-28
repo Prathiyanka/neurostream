@@ -144,6 +144,8 @@ def test_training_with_index_arrays_matches_training_on_copies() -> None:
 def test_onnx_export_matches_pytorch(tmp_path: Path) -> None:
     model = EEGNet(6, 320).eval()
     assert export_onnx(model, tmp_path / "m.onnx") < 1e-5
+    # Weights are inside the one file the model card hashes, not in a side file.
+    assert [f.name for f in tmp_path.iterdir()] == ["m.onnx"]
 
 
 def test_metrics() -> None:
