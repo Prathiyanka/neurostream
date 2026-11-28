@@ -10,3 +10,4 @@ RUN useradd --create-home app
 USER app
 ENTRYPOINT ["python", "-m", "replayer"]
 CMD ["--help"]
+EXPOSE 8002

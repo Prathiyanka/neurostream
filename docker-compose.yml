@@ -66,18 +66,27 @@ services:
       redis:
         condition: service_healthy
 
-  # On-demand device simulator (not started by `up`; the API will drive it in Phase 5):
-  #   docker compose run --rm replayer --subjects 1 2 --speed 1
+  # Device simulator, run as its own service ("an external device"): the API starts and
+  # stops replays over HTTP. Load tests use its command-line mode in separate containers:
+  #   docker compose run --rm replayer --url ws://ingest:8001/ws/device --data-dir /data --subjects 1 2
   replayer:
-    profiles: ["replay"]
     build:
       context: .
       dockerfile: services/replayer/Dockerfile
-    command: ["--url", "ws://ingest:8001/ws/device", "--data-dir", "/data", "--subjects", "1"]
+    command: ["serve"]
     volumes:
       - ./data:/data:ro
     environment:
+      INGEST_URL: ws://ingest:8001/ws/device
+      DATA_DIR: /data
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "${REPLAYER_PORT:-8002}:8002"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8002/health').status==200 else 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     depends_on:
       ingest:
         condition: service_healthy

@@ -160,3 +160,15 @@ async def test_slow_initial_connect_does_not_skip_packets() -> None:
     stats = await SessionStreamer(cfg(speed=100.0), REC, slow_connect).run()
     assert stats.lost_while_disconnected == 0
     assert dev.data_seqs()[:3] == [0, 1, 2]
+
+
+async def test_stop_ends_the_session_early_and_cleanly() -> None:
+    dev = FakeDevice()
+    streamer = SessionStreamer(cfg(speed=20.0), REC, dev.connect)  # 5 s recording -> 0.25 s
+    task = asyncio.create_task(streamer.run())
+    await asyncio.sleep(0.08)
+    streamer.stop()
+    stats = await asyncio.wait_for(task, 2)
+    assert 0 < stats.sent < 50  # stopped part-way
+    assert dev.messages[-1]["type"] == "end"  # ingest is told, as for a normal finish
+    assert dev.data_seqs() == list(range(stats.sent))

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import secrets
 import sys
 from dataclasses import asdict
@@ -80,6 +81,12 @@ async def run(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     configure_logging()
+    args = sys.argv[1:] if argv is None else argv
+    if args[:1] == ["serve"]:  # long-running device service, controlled over HTTP
+        from replayer.server import serve
+
+        serve(port=int(os.environ.get("REPLAYER_PORT", "8002")))
+        return 0
     try:
         return asyncio.run(run(parse_args(argv)))
     except KeyboardInterrupt:

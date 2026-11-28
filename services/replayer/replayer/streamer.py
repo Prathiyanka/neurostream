@@ -130,6 +130,12 @@ class SessionStreamer:
         self._injector = FaultInjector(cfg.faults)
         self._conn: Connection | None = None
         self._reader: asyncio.Task[None] | None = None
+        self._stop_requested = False
+
+    def stop(self) -> None:
+        """Ask a running session to end early. It finishes the packet in progress, sends
+        `end` (so ingest closes the session cleanly, as for a normal finish) and returns."""
+        self._stop_requested = True
 
     def _total_packets(self) -> int:
         per_rec = self.rec.n_samples // self.cfg.chunk_size
@@ -200,7 +206,7 @@ class SessionStreamer:
         held: str | None = None  # packet delayed by an injected reorder
         last_disconnect_seq = -1
         seq = 0
-        while seq < total:
+        while seq < total and not self._stop_requested:
             if self._conn is None:
                 await self._connect()
                 due_now = int((loop.time() - t0) / period)
