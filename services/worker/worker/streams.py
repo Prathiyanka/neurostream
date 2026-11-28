@@ -38,33 +38,9 @@ from redis.exceptions import ResponseError
 
 from neurostream_common import keys
 from neurostream_common.codec import Fields
+from neurostream_common.redis_scripts import READ_SCRIPT
 
 Entry = tuple[str, dict[bytes, bytes]]  # (stream id, fields)
-
-# KEYS: stream, metrics hash. ARGV: group, consumer, count.
-# Returns {entries or false, skipped, last-delivered-id}.
-READ_SCRIPT = r"""
-local function group_info()
-  for _, g in ipairs(redis.call('XINFO', 'GROUPS', KEYS[1])) do
-    local info = {}
-    for i = 1, #g, 2 do info[g[i]] = g[i + 1] end
-    if info['name'] == ARGV[1] then return info end
-  end
-  return redis.error_reply('NOGROUP no group ' .. ARGV[1])
-end
-local before = group_info()['entries-read'] or 0
-local res = redis.call('XREADGROUP', 'GROUP', ARGV[1], ARGV[2], 'COUNT', ARGV[3],
-                       'STREAMS', KEYS[1], '>')
-local n = 0
-if res then n = #res[1][2] end
-local after = group_info()
-local skipped = (after['entries-read'] or 0) - before - n
-if skipped > 0 then
-  redis.call('HINCRBY', KEYS[2], 'lost_trimmed_undelivered', skipped)
-end
-if n > 0 then redis.call('HINCRBY', KEYS[2], 'delivered', n) end
-return {res, skipped, after['last-delivered-id']}
-"""
 
 # KEYS: stream, metrics hash. ARGV: group, counter, ids... Acks and counts in one step, so
 # the counter (`acked` for predicted jobs, `stale` for skipped ones) counts each job exactly

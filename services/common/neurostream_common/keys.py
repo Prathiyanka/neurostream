@@ -7,6 +7,7 @@ WINDOWS_DEAD_STREAM = "ns:windows:dead"  # jobs that failed repeatedly, kept for
 PREDICTIONS_STREAM = "ns:predictions"  # durable: the API persists from here (Phase 5)
 PREDICTIONS_CHANNEL = "ns:predictions:live"  # pub/sub fan-out for live views (lossy)
 WORKER_METRICS = "ns:metrics:workers"  # counters summed over all workers
+PERSISTER_METRICS = "ns:metrics:persister"  # API persister counters
 WORKERS_SET = "ns:workers"
 MODEL_ACTIVE = "ns:model:active"  # model id (<name>-<version>) workers should serve
 
