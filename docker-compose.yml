@@ -124,6 +124,16 @@ services:
       replayer:
         condition: service_healthy
 
+  # Dashboard: static build served by nginx, which proxies /api and /ws to the API.
+  dashboard:
+    build:
+      context: ./dashboard
+    ports:
+      - "${DASHBOARD_PORT:-8080}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+
 volumes:
   pgdata:
   redisdata:
