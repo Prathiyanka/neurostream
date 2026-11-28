@@ -174,11 +174,25 @@ Work through these in order. \*\*At the end of each phase: run the tests, commit
 
 8\. \*\*Polish\*\* — final README with diagram and results, cleanup, and a list of 3–4 strong resume bullet points based on the \*actual measured\* results.
 
+9\. \*\*Accuracy sprint\*\* (after Phase 8) — improve the model, one change at a time, in this order:
+
+&#x20;  1. \*\*Early-stopping patience:\*\* check patience (and validation set size) given that validation is only 8 subjects per fold and best epochs are often 1.
+
+&#x20;  2. \*\*Euclidean alignment:\*\* align each subject's EEG covariance before training and inference.
+
+&#x20;  3. \*\*Temporal smoothing of predictions:\*\* smooth over consecutive windows; chart accuracy vs. added latency.
+
+&#x20;  4. \*\*Per-user fine-tuning:\*\* fine-tune the cross-subject EEGNet on N minutes of a held-out subject's data; plot accuracy vs. calibration minutes.
+
+&#x20;  5. \*\*Optional — extra datasets via MOABB,\*\* mapped to our 21 motor channels.
+
+&#x20;  Rules for this phase: every change is evaluated on the same held-out subjects (the existing 5 cross-subject folds), with no tuning on test folds (choices are made on validation data only). Every result goes in `docs/MODEL\_RESULTS.md`, including changes that don't help.
+
 \## Stretch goals (only after phase 8, and only if I ask)
 
 \- Rewrite the ingest service in Go for higher throughput and benchmark the difference.
 
-\- Per-user calibration: fine-tune the model on a few minutes of a new subject's data.
+\- ~~Per-user calibration~~ — moved into Phase 9, step 4.
 
 \- Deploy a live demo to the cloud.
 
