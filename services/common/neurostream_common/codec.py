@@ -143,6 +143,11 @@ class Prediction:
     Timestamps are wall-clock seconds on the shared host clock. ``window_end_ts`` is when
     the packet holding the window's last sample reached ingest; ``latency_ms`` runs from
     there to ``publish_ts`` (just before the worker's publishing round trip).
+
+    Needs a precise wall clock: on Linux (and in the Docker containers) ``time.time()``
+    resolves well under a microsecond; on a Windows host with Python 3.11 it ticks in ~1 to
+    16 ms steps, so latencies measured there are coarse. All reported numbers come from
+    the containers.
     """
 
     window_id: str

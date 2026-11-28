@@ -20,7 +20,9 @@ with three. No window was lost in any run (1,160 windows each).
 - Window jobs: 2 s window + 0.5 s pad, every 0.5 s per session, so 20 jobs/s in total.
 - Served model `eegnet-motor-1.0.1`, one ONNX Runtime thread per worker.
 - Everything runs in Docker Desktop on a Windows 11 laptop (Docker VM: 8 CPUs, 8 GB).
-  All timestamps come from containers on the same VM clock.
+  All timestamps come from containers on the same VM clock (Linux, resolution well
+  under 1 µs; a Windows host's `time.time()` in Python 3.11 ticks in ~1 to 16 ms steps, so
+  latency is never measured there).
 - Each configuration was run 3 times. One run is not enough here: identical runs differ
   by nearly 4x at p99 (28 vs. 108 ms with three workers, see below).
 

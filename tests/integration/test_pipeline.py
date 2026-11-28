@@ -126,7 +126,10 @@ async def check_matches_offline(
     offline = offline_probabilities(rec, pad)
     for p in preds:
         np.testing.assert_allclose(p.probabilities, offline[p.window_end_sample], atol=2e-6)
-        assert p.latency_ms > 0 and p.batch_size >= 1
+        # >= 0, not > 0: on a Windows host, Python 3.11's time.time() ticks in ~1-16 ms
+        # steps, so a fast window can measure 0 ms. (Benchmarks run in Linux containers,
+        # where the clock resolves well under a microsecond.)
+        assert p.latency_ms >= 0 and p.batch_size >= 1
 
 
 async def test_every_window_is_predicted_exactly_as_offline(
