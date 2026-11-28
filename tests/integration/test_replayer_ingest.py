@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 from websockets.asyncio.client import connect
 
+from ingest.settings import Settings
 from neurostream_common import keys
 from neurostream_common.codec import decode_raw_packet, decode_window_job
 from neurostream_common.windowing import WindowSpec, extract_windows
@@ -20,7 +21,13 @@ from replayer.streamer import SessionConfig, SessionStreamer, StreamStats
 from tests.integration.conftest import IngestServer
 
 pytestmark = pytest.mark.integration
-SPEC = WindowSpec()
+_S = Settings()
+SPEC = WindowSpec(window_s=_S.window_s, step_s=_S.step_s, pad_s=_S.pad_s)  # what ingest uses
+
+
+def n_windows(seconds: float, sfreq: float = 160.0) -> int:
+    """Windows a clean recording of this length yields on ingest's grid."""
+    return (round(seconds * sfreq) - SPEC.span_samples) // SPEC.step_samples + 1
 
 
 async def metrics(server: IngestServer, session_id: str) -> dict[str, int]:
@@ -65,7 +72,7 @@ async def test_clean_stream_produces_exactly_the_offline_windows(
     offline = list(extract_windows(rec.data, rec.labels, SPEC))
 
     # Every window arrives, byte-identical (up to the 3-decimal wire rounding) to training's.
-    assert len(jobs) == len(offline) == 15
+    assert len(jobs) == len(offline) == n_windows(10.0)
     for job, ref in zip(jobs, offline, strict=True):
         assert job.window.start_sample == ref.start_sample
         np.testing.assert_allclose(job.window.data, ref.data, atol=6e-4)
@@ -78,7 +85,7 @@ async def test_clean_stream_produces_exactly_the_offline_windows(
 
     m = await metrics(ingest_server, "clean")
     assert m["accepted"] == 100 and m["duplicates"] == m["gaps"] == m["invalid"] == 0
-    assert m["windows_emitted"] == 15
+    assert m["windows_emitted"] == n_windows(10.0)
 
     meta = await ingest_server.redis.hgetall(keys.session_meta("clean"))  # type: ignore[misc]
     assert meta[b"status"] == b"ended"
@@ -121,7 +128,7 @@ async def test_concurrent_sessions_are_isolated(ingest_server: IngestServer) -> 
     await asyncio.gather(*(stream(ingest_server, r, f"multi{i}") for i, r in enumerate(recs)))
     for i in range(5):
         jobs = await windows_for(ingest_server, f"multi{i}")
-        assert len(jobs) == 15
+        assert len(jobs) == n_windows(10.0)
         ref = next(iter(extract_windows(recs[i].data, recs[i].labels, SPEC)))
         np.testing.assert_allclose(jobs[0].window.data, ref.data, atol=6e-4)
 
@@ -175,6 +182,7 @@ async def test_real_eeg_subject(ingest_server: IngestServer) -> None:
     assert {"C3", "Cz", "C4"} <= set(rec.ch_names)
     await stream(ingest_server, rec, "real1", max_seconds=10.0, speed=40.0)
     jobs = await windows_for(ingest_server, "real1")
-    assert len(jobs) == 15 and jobs[0].window.data.shape == (64, 480)
+    assert len(jobs) == n_windows(10.0)
+    assert jobs[0].window.data.shape == (64, SPEC.span_samples)
     ref = next(iter(extract_windows(rec.data, rec.labels, SPEC)))
     np.testing.assert_allclose(jobs[0].window.data, ref.data, atol=6e-4)
