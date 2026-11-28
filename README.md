@@ -158,10 +158,17 @@ with `--drop-prob`, `--duplicate-prob`, `--reorder-prob`, `--jitter-ms`,
   pays off. Predictions are published (durable stream + live pub/sub) *before* the job is
   acknowledged, so a crash can produce a duplicate prediction but never lose one
   (at-least-once; the deterministic window id lets the API de-duplicate).
-- **Crash recovery: reclaim, then dead-letter.** Every second, each worker takes over jobs
-  another worker has held unacknowledged for 5 s (`XAUTOCLAIM`). A job that can never work
+- **Crash recovery: reclaim, then dead-letter.** Every 0.5 s, each worker takes over jobs
+  another worker has held unacknowledged for 1 s (`XAUTOCLAIM`). 1 s is ~100x a normal
+  batch, so live workers keep their jobs, and short enough that recovered jobs are still
+  fresh enough to be worth predicting. A job that can never work
   (wrong sampling rate, unknown session) is set aside in `ns:windows:dead` at once; one
   delivered more than 3 times is too, so a poison message cannot crash workers forever.
+- **Stale jobs are skipped, not processed late.** Under overload, a prediction for a
+  window that completed seconds ago is useless live and delays fresher ones. A worker
+  acknowledges such jobs without running the model and counts them as `stale` (threshold
+  `STALE_AFTER_S`, default 2 s; 0 disables). Stale is counted separately from lost: the
+  data arrived, the system chose to drop it.
 - **Lost jobs are counted, exactly.** `ns:windows` is capped (`MAXLEN ~ 5000`) so an
   overload cannot exhaust Redis memory, but trimming deletes jobs whether or not anyone
   acknowledged them. Redis 7 keeps a consumer group's `entries-read` as a position in
@@ -169,7 +176,7 @@ with `--drop-prob`, `--duplicate-prob`, `--reorder-prob`, `--jitter-ms`,
   skipped. Workers read through a small Lua script that checks the position before and
   after the read *atomically*, which keeps the count exact with many workers reading.
   Trimmed jobs that were pending show up when they are reclaimed. Tests check that the
-  books balance: `entries-added = acked + lost + dead-lettered + pending + lag`.
+  books balance: `entries-added = acked + stale + lost + dead-lettered + pending + lag`.
 - **Workers refuse a model whose hash does not match its card**, and warm the model up
   (dummy batches of every size) before taking traffic: measured, a cold worker's first
   inference calls took up to 101 ms instead of ~2 ms.

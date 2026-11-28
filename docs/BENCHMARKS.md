@@ -33,14 +33,14 @@ python scripts/measure_latency.py --summarize
 
 ### Results
 
-| Workers | Run | Windows | Lost | Total p50 | p95 | p99 | max | Queue p50 / p95 | Worker p50 / p95 | Mean batch |
-|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | run1 | 1160 | 0 | 18.9 ms | 37.9 ms | 43.1 ms | 55.3 ms | 11.0 / 26.1 ms | 6.7 / 14.5 ms | 4.21 |
-| 1 | run2 | 1160 | 0 | 15.0 ms | 32.8 ms | 40.2 ms | 49.6 ms | 8.6 / 21.2 ms | 5.5 / 13.7 ms | 3.98 |
-| 1 | run3 | 1160 | 0 | 14.2 ms | 36.4 ms | 47.7 ms | 77.9 ms | 7.9 / 21.6 ms | 5.4 / 15.8 ms | 3.89 |
-| 3 | run1 | 1160 | 0 | 10.1 ms | 45.8 ms | 67.4 ms | 94.1 ms | 5.5 / 31.5 ms | 3.8 / 19.6 ms | 2.26 |
-| 3 | run2 | 1160 | 0 | 8.8 ms | 21.6 ms | 28.4 ms | 41.8 ms | 4.9 / 13.2 ms | 3.6 / 8.8 ms | 2.24 |
-| 3 | run3 | 1160 | 0 | 8.8 ms | 36.9 ms | 108.0 ms | 147.5 ms | 4.8 / 23.5 ms | 3.1 / 15.0 ms | 1.74 |
+| Workers | Run | Windows | Lost | Stale | Total p50 | p95 | p99 | max | Queue p50 / p95 | Worker p50 / p95 | Mean batch |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | run1 | 1160 | 0 | n/a | 18.9 ms | 37.9 ms | 43.1 ms | 55.3 ms | 11.0 / 26.1 ms | 6.7 / 14.5 ms | 4.21 |
+| 1 | run2 | 1160 | 0 | n/a | 15.0 ms | 32.8 ms | 40.2 ms | 49.6 ms | 8.6 / 21.2 ms | 5.5 / 13.7 ms | 3.98 |
+| 1 | run3 | 1160 | 0 | n/a | 14.2 ms | 36.4 ms | 47.7 ms | 77.9 ms | 7.9 / 21.6 ms | 5.4 / 15.8 ms | 3.89 |
+| 3 | run1 | 1160 | 0 | n/a | 10.1 ms | 45.8 ms | 67.4 ms | 94.1 ms | 5.5 / 31.5 ms | 3.8 / 19.6 ms | 2.26 |
+| 3 | run2 | 1160 | 0 | n/a | 8.8 ms | 21.6 ms | 28.4 ms | 41.8 ms | 4.9 / 13.2 ms | 3.6 / 8.8 ms | 2.24 |
+| 3 | run3 | 1160 | 0 | n/a | 8.8 ms | 36.9 ms | 108.0 ms | 147.5 ms | 4.8 / 23.5 ms | 3.1 / 15.0 ms | 1.74 |
 
 Stages (each prediction carries them, so they always add up):
 **total = ingest** (window complete → job produced) **+ queue** (job produced → read by a
@@ -82,9 +82,16 @@ cross-subject estimate of 45.7% in [`MODEL_RESULTS.md`](MODEL_RESULTS.md) is the
 - **Worker killed mid-stream** (`test_killing_a_worker_mid_stream_loses_no_windows`):
   two worker processes, one hard-killed (`TerminateProcess` / `SIGKILL`) while it held
   unacknowledged jobs. Every window ingest produced got a prediction; the dead worker's
-  jobs were reclaimed by the survivor after 1 s of idleness.
+  jobs were reclaimed by the survivor after 1 s of idleness. (The stale check is off in
+  this test so that it can require a prediction for every window.)
+- **Stale jobs** (`test_stale_jobs_are_skipped_and_counted_separately`): jobs whose window
+  completed more than `STALE_AFTER_S` (default 2 s) before a worker reads them are
+  acknowledged without a prediction and counted as `stale`, separately from `lost`.
+
+"Stale" column: `n/a` for runs recorded before stale skipping existed. Their worst latency
+was 148 ms, far below the 2 s threshold, so it could not have changed them.
 - **Overload past the stream cap** (`test_overload_trimming_is_counted_as_lost`): three
   sessions at 40x real time into one deliberately slow worker with `ns:windows` capped at
   ~20 jobs. Most jobs are trimmed before any worker reads them. Every trimmed job is
   counted as lost, and the stream accounting balances exactly:
-  `entries-added = acked + lost_trimmed_undelivered + lost_trimmed_pending + dead_lettered + pending + lag`.
+  `entries-added = acked + stale + lost_trimmed_undelivered + lost_trimmed_pending + dead_lettered + pending + lag`.

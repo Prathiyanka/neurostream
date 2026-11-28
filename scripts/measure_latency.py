@@ -94,9 +94,9 @@ def balanced_accuracy(preds: list[Prediction]) -> tuple[float, int]:
 def summarize(results_dir: Path) -> str:
     """Markdown table over every result file, so docs only contain measured numbers."""
     rows = [
-        "| Workers | Run | Windows | Lost | Total p50 | p95 | p99 | max "
+        "| Workers | Run | Windows | Lost | Stale | Total p50 | p95 | p99 | max "
         "| Queue p50 / p95 | Worker p50 / p95 | Mean batch |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     files = sorted(results_dir.glob("latency_*.json"))
     for f in sorted(files, key=lambda f: (json.loads(f.read_text())["config"]["workers"], f.name)):
@@ -105,7 +105,8 @@ def summarize(results_dir: Path) -> str:
         lost = d["lost_trimmed_undelivered"] + d["lost_trimmed_pending"] + d["dead_lettered"]
         rows.append(
             f"| {d['config']['workers']} | {f.stem.rsplit('_', 1)[-1]} | {d['unique_windows']} "
-            f"| {lost} | {lat['p50']:.1f} ms | {lat['p95']:.1f} ms | {lat['p99']:.1f} ms "
+            f"| {lost} | {d.get('stale', 'n/a')} "  # n/a: run predates stale skipping
+            f"| {lat['p50']:.1f} ms | {lat['p95']:.1f} ms | {lat['p99']:.1f} ms "
             f"| {lat['max']:.1f} ms | {q['p50']:.1f} / {q['p95']:.1f} ms "
             f"| {w['p50']:.1f} / {w['p95']:.1f} ms | {d['batch_size']['mean']:.2f} |"
         )
@@ -182,6 +183,7 @@ def main() -> int:
         "lost_trimmed_undelivered": delta.get("lost_trimmed_undelivered", 0),
         "lost_trimmed_pending": delta.get("lost_trimmed_pending", 0),
         "dead_lettered": delta.get("dead_lettered", 0),
+        "stale": delta.get("stale", 0),
         "reclaimed": delta.get("reclaimed", 0),
         "latency": {f: pct([getattr(p, f) for p in preds]) for f in FIELDS},
         "batch_size": {
@@ -194,7 +196,7 @@ def main() -> int:
     lat = result["latency"]
     print(f"{len(preds)} predictions ({result['unique_windows']} windows), "
           f"lost {result['lost_trimmed_undelivered'] + result['lost_trimmed_pending']}, "
-          f"dead {result['dead_lettered']}")  # fmt: skip
+          f"dead {result['dead_lettered']}, stale {result['stale']}")  # fmt: skip
     print("| Stage | p50 | p95 | p99 | max |\n|---|---|---|---|---|")
     for f in FIELDS:
         x = lat[f]
