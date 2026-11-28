@@ -2,6 +2,7 @@
 # Each service also has its own requirements.txt, used by its Docker image.
 -r services/ingest/requirements.txt
 -r services/replayer/requirements.txt
+-r services/worker/requirements.txt
 -r ml/requirements.txt
 -e ./services/common
 -e ./ml
