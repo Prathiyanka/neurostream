@@ -58,3 +58,34 @@ def test_annotations_to_labels() -> None:
 def test_unknown_annotations_ignored() -> None:
     labels = annotations_to_labels(10, 10.0, [0.0], [1.0], ["BAD"])
     assert np.all(labels == UNKNOWN)
+
+
+def test_prediction_round_trips_through_stream_fields_and_json() -> None:
+    import json
+
+    from neurostream_common.codec import Prediction, decode_prediction, encode_prediction
+
+    p = Prediction(
+        window_id="s1:399",
+        session_id="s1",
+        window_end_sample=399,
+        window_end_ts=1700000000.25,
+        predicted_class=2,
+        probabilities=(0.1, 0.2, 0.7),
+        true_label=-1,
+        filled_samples=3,
+        model="eegnet-motor-1.0.1",
+        worker_id="w1",
+        reclaimed=True,
+        batch_size=4,
+        ingest_ms=0.5,
+        queue_ms=1.5,
+        preprocess_ms=0.4,
+        inference_ms=1.2,
+        latency_ms=3.9,
+        publish_ts=1700000000.2539,
+    )
+    # Redis returns bytes for every field value.
+    raw = {k.encode(): str(v).encode() for k, v in encode_prediction(p).items()}
+    assert decode_prediction(raw) == p
+    assert json.loads(p.to_json())["probabilities"] == [0.1, 0.2, 0.7]

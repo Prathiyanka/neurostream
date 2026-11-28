@@ -6,8 +6,9 @@ Arrays travel as raw little-endian float32/int8 bytes, not JSON: a 64 x 480 wind
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 import numpy as np
 
@@ -132,4 +133,72 @@ def decode_raw_packet(fields: RawFields) -> RawPacket:
         ingest_ts=f.number("ingest_ts"),
         data=np.frombuffer(f.raw("data"), dtype=F32).reshape(n_ch, n),
         labels=np.frombuffer(f.raw("labels"), dtype=I8),
+    )
+
+
+@dataclass(frozen=True)
+class Prediction:
+    """One classified window, as published by a worker.
+
+    Timestamps are wall-clock seconds on the shared host clock. ``window_end_ts`` is when
+    the packet holding the window's last sample reached ingest; ``latency_ms`` runs from
+    there to ``publish_ts`` (just before the worker's publishing round trip).
+    """
+
+    window_id: str
+    session_id: str
+    window_end_sample: int
+    window_end_ts: float
+    predicted_class: int
+    probabilities: tuple[float, ...]
+    true_label: int  # label shared by every classified sample, or UNKNOWN (-1) if mixed
+    filled_samples: int  # samples in the span synthesized to cover a packet gap
+    model: str
+    worker_id: str
+    reclaimed: bool  # processed after being reclaimed from another (dead or slow) worker
+    batch_size: int  # windows in the inference call this one was part of
+    ingest_ms: float  # window complete at ingest -> job produced
+    queue_ms: float  # job produced -> read by the worker (ingest buffer, Redis, waiting)
+    preprocess_ms: float  # this window's filter + normalization
+    inference_ms: float  # the whole batched ONNX call this window was part of
+    latency_ms: float  # end to end: window_end_ts -> publish_ts
+    publish_ts: float
+
+    def to_json(self) -> str:
+        d = asdict(self)
+        d["probabilities"] = list(self.probabilities)
+        return json.dumps(d, separators=(",", ":"))
+
+
+_PRED_INT = ("window_end_sample", "predicted_class", "true_label", "filled_samples", "batch_size")
+_PRED_FLOAT = (
+    "window_end_ts",
+    "ingest_ms",
+    "queue_ms",
+    "preprocess_ms",
+    "inference_ms",
+    "latency_ms",
+    "publish_ts",
+)
+
+
+def encode_prediction(p: Prediction) -> Fields:
+    d = asdict(p)
+    d["probabilities"] = json.dumps(list(p.probabilities))
+    d["reclaimed"] = int(p.reclaimed)
+    return d
+
+
+def decode_prediction(fields: RawFields) -> Prediction:
+    f = _Fields(fields)
+    kw: dict[str, object] = {k: f.integer(k) for k in _PRED_INT}
+    kw.update({k: f.number(k) for k in _PRED_FLOAT})
+    return Prediction(
+        window_id=f.text("window_id"),
+        session_id=f.text("session_id"),
+        model=f.text("model"),
+        worker_id=f.text("worker_id"),
+        reclaimed=bool(f.integer("reclaimed")),
+        probabilities=tuple(float(x) for x in json.loads(f.text("probabilities"))),
+        **kw,  # type: ignore[arg-type]
     )
