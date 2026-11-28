@@ -287,3 +287,4 @@ async def test_live_websocket_streams_predictions_traces_and_metrics(
     assert len(trace["data"][0]) == 4  # one 16-sample packet -> 4 display samples
     assert seen["prediction"]["session_id"] == sid
     assert "stale" in seen["metrics"]["jobs"]
+    assert seen["metrics"]["ingest"]["sessions_connected"] >= 1  # the session was streaming

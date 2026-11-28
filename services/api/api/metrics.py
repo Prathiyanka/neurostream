@@ -90,7 +90,7 @@ async def ingest_totals(r: Redis) -> dict[str, int]:
             for k, v in _ints(m).items():
                 if k in totals:
                     totals[k] += v
-            connected += status == b"connected"
+            connected += status == b"streaming"  # ingest's status while a device is on
     return {"sessions": len(ids), "sessions_connected": connected, **totals}
 
 
