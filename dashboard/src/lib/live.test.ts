@@ -116,6 +116,20 @@ describe("LiveClient", () => {
     expect(s.status === "reconnecting" && s.reason).toContain("no data");
   });
 
+  it("abandons a connection attempt that never opens", () => {
+    const { client, states } = makeClient({ connectTimeoutMs: 5000 });
+    client.start();
+    const hung = last(); // e.g. a proxy waiting on an API that is down
+    vi.advanceTimersByTime(4999);
+    expect(states.at(-1)!.status).toBe("connecting");
+    vi.advanceTimersByTime(1);
+    expect(hung.closed).toBe(true);
+    const s = states.at(-1)!;
+    expect(s.status === "reconnecting" && s.reason).toBe("connect timed out");
+    vi.advanceTimersByTime(500);
+    expect(FakeSocket.instances).toHaveLength(2);
+  });
+
   it("ignores a late close event from a socket it already gave up on", () => {
     const { client, states } = makeClient({ silenceTimeoutMs: 1000 });
     client.start();

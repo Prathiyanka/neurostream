@@ -4,7 +4,8 @@
 // capped), reset after a connection has been healthy for a while. Jitter matters when
 // the API restarts: without it every open dashboard would reconnect in the same instant.
 //
-// A watchdog treats "connected but silent" as dead: the API sends metrics every second,
+// A connect timeout abandons an attempt that never opens (a proxy waiting on an API that is
+// down can hold it for a long time), and a watchdog treats "connected but silent" as dead: the API sends metrics every second,
 // so 5 s without any message means the connection is broken even if the socket has not
 // noticed (e.g. a laptop waking from sleep). It closes the socket and reconnects.
 
@@ -26,6 +27,7 @@ export interface LiveClientOptions {
   baseDelayMs?: number;
   maxDelayMs?: number;
   silenceTimeoutMs?: number;
+  connectTimeoutMs?: number;
   healthyAfterMs?: number; // connection must last this long to reset the backoff
   random?: () => number;
   now?: () => number;
@@ -59,6 +61,7 @@ export class LiveClient {
       baseDelayMs: 500,
       maxDelayMs: 10_000,
       silenceTimeoutMs: 5_000,
+      connectTimeoutMs: 5_000,
       healthyAfterMs: 5_000,
       random: Math.random,
       now: () => Date.now(),
@@ -95,6 +98,7 @@ export class LiveClient {
     this.o.onState({ status: "connecting", attempt: this.attempt });
     const ws = new this.o.WebSocketImpl(this.o.url);
     this.ws = ws;
+    this.watchdog = setTimeout(() => this.abandon(ws, "connect timed out"), this.o.connectTimeoutMs);
     // Every handler ignores a socket that is no longer current: after the watchdog gives
     // up on a silent socket, its late close event must not start a second reconnect.
     ws.onopen = () => {
@@ -125,12 +129,20 @@ export class LiveClient {
 
   private armWatchdog(): void {
     if (this.watchdog) clearTimeout(this.watchdog);
-    this.watchdog = setTimeout(() => {
-      const ws = this.ws;
-      this.ws = null;
-      ws?.close();
-      this.scheduleReconnect("no data for " + this.o.silenceTimeoutMs / 1000 + " s");
-    }, this.o.silenceTimeoutMs);
+    const ws = this.ws;
+    this.watchdog = setTimeout(
+      () => this.abandon(ws, `no data for ${this.o.silenceTimeoutMs / 1000} s`),
+      this.o.silenceTimeoutMs,
+    );
+  }
+
+  /** Give up on a socket that hangs (never opens, or goes silent) and reconnect. */
+  private abandon(ws: WebSocket | null, reason: string): void {
+    if (this.ws !== ws) return;
+    this.watchdog = null;
+    this.ws = null;
+    ws?.close();
+    this.scheduleReconnect(reason);
   }
 
   private scheduleReconnect(reason: string): void {
