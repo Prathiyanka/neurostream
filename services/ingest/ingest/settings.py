@@ -13,7 +13,7 @@ class Settings:
     redis_url: str = "redis://localhost:6379/0"
     window_s: float = 2.0
     step_s: float = 0.5
-    pad_s: float = 1.0
+    pad_s: float = 0.5  # filter settling pad; 0.5 s measured lossless (docs/MODEL_RESULTS.md)
     max_fill_s: float = 0.25  # gaps up to this long are filled; longer ones reset windowing
     queue_max_items: int = 512  # per-session write buffer (items = raw packets or windows)
     write_batch_max: int = 64  # max items per Redis pipeline round-trip
