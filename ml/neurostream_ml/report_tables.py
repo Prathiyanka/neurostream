@@ -130,7 +130,15 @@ def build_report(results: Path) -> str:
         r = load(results, name)
         if r is not None:
             within[label] = r[key]
-    out += ["", "## Within-subject (train runs 4+8, test run 12)", "", HEADER]
+    out += [
+        "",
+        "## Within-subject (test run 12)",
+        "",
+        "CSP+LDA trains on runs 4 and 8. EEGNet trains on run 4 only and uses run 8 for"
+        " early stopping, so it sees half the training data: the EEGNet row is a lower bound.",
+        "",
+        HEADER,
+    ]
     out += [row(k, v) for k, v in within.items()]
 
     out += ["", "## Paired per-subject differences (balanced accuracy, 95% bootstrap CI)", ""]
