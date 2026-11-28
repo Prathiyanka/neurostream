@@ -81,3 +81,10 @@ def test_window_preprocessor_selects_motor_channels() -> None:
     span = np.random.default_rng(3).normal(size=(64, 480))
     out = prep(span, 160)
     assert out.shape == (21, 320) and prep.n_channels == 21
+
+
+def test_eegmmidb_channel_list_is_64_unique_and_contains_the_motor_set() -> None:
+    from neurostream_common.channels import EEGMMIDB_CHANNELS, MOTOR_CHANNELS
+
+    assert len(EEGMMIDB_CHANNELS) == len(set(EEGMMIDB_CHANNELS)) == 64
+    assert set(MOTOR_CHANNELS) <= set(EEGMMIDB_CHANNELS)
