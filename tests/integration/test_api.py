@@ -238,11 +238,20 @@ async def test_a_tampered_model_cannot_be_activated(
 
 async def test_metrics_health_and_history(api: Api, sync_redis: SyncRedis) -> None:  # noqa: F811
     with WorkerThread(make_worker()):
-        await asyncio.sleep(0.5)
+        # The first heartbeat comes after model warm-up, which is slower on CI runners.
+        async def worker_up() -> bool:
+            return bool((await api.client.get("/metrics")).json()["workers"]["count"] == 1)
+
+        await eventually(worker_up, 20, "worker heartbeat")
         m = (await api.client.get("/metrics")).json()
         assert m["workers"]["count"] == 1 and m["workers"]["list"][0]["model"] == SERVED_MODEL
         assert set(m["jobs"]) >= {"acked", "stale", "lost", "dead_lettered"}
-        await asyncio.sleep(0.8)  # snapshots every 0.3 s in tests
+
+        async def snapshot_with_worker() -> bool:  # snapshots every 0.3 s in tests
+            rows = (await api.client.get("/metrics/history?minutes=1")).json()
+            return any(r["workers"] == 1 for r in rows)
+
+        await eventually(snapshot_with_worker, 20, "a metrics snapshot")
     h = await api.client.get("/health")
     assert h.status_code == 200 and h.json() == {
         "status": "ok",
@@ -251,7 +260,7 @@ async def test_metrics_health_and_history(api: Api, sync_redis: SyncRedis) -> No
         "replayer": True,
     }
     history = (await api.client.get("/metrics/history?minutes=1")).json()
-    assert history and history[-1]["workers"] in (0, 1) and "stale" in history[-1]["counters"]
+    assert history and "stale" in history[-1]["counters"]
 
 
 async def test_live_websocket_streams_predictions_traces_and_metrics(
